@@ -1,0 +1,6 @@
+{
+  "name": "Website Profil Desa",
+  "description": "Website resmi profil desa dengan data statistik kependudukan, portal berita, galeri kegiatan, dan dashboard administrasi mandiri.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
