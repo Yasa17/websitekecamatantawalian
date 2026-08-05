@@ -1,0 +1,13 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "websitekecamatantawalian",
+  "pages_build_output_dir": "./dist",
+  "compatibility_date": "2026-07-12",
+  "compatibility_flags": ["nodejs_compat"],
+  "hyperdrive": [
+    {
+      "binding": "HYPERDRIVE",
+      "id": "fbb1297a3a444515a55f43967bb7bb8c"
+    }
+  ]
+}

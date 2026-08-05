@@ -85,11 +85,17 @@ Project Pages menggunakan konfigurasi build berikut:
 - compatibility flag: `nodejs_compat`
 - binding Hyperdrive: `HYPERDRIVE`
 
-Folder `functions/api` menjalankan backend Express sebagai Pages Function.
+Folder `functions/api` menjalankan adaptor Fetch native sebagai Pages Function;
+Express hanya digunakan oleh server lokal Node.js.
 Frontend tetap memakai alamat relatif `/api`, sehingga tidak membutuhkan URL API
 atau pengaturan CORS tambahan. Berkas `public/_routes.json` memastikan hanya
 permintaan `/api/*` yang menjalankan Function; aset React tetap dilayani sebagai
 Pages statis.
+
+Berkas `wrangler.jsonc` adalah sumber konfigurasi deployment Pages. Berkas ini
+memuat compatibility flag dan ID binding Hyperdrive yang bukan rahasia. Connection
+string, password database, dan `localConnectionString` tidak boleh dimasukkan ke
+berkas tersebut atau disimpan di Git.
 
 Hyperdrive harus dibuat memakai **Direct connection** Supabase, bukan Session
 pooler, karena Hyperdrive sudah menangani connection pooling. Connection string
