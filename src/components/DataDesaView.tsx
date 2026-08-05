@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   ResponsiveContainer,
   BarChart,
@@ -31,11 +31,15 @@ import {
   FileText,
   Image as ImageIcon,
   Info,
-  Layers,
   TrendingUp,
 } from 'lucide-react';
 import { StatisticCategory, VillageProfile } from '../types';
-import { exportToCSV, exportToExcel, exportToPDF, exportChartToImage } from '../utils/exportHelpers';
+import { exportToCSV, exportToPDF, exportChartToImage } from '../utils/exportHelpers';
+import {
+  buildStatisticHeaderRows,
+  downloadStatisticWorkbook,
+} from '../utils/statisticTable';
+import { getStatisticPresentation } from '../utils/statisticPresentation';
 
 interface DataDesaViewProps {
   statistics: StatisticCategory[];
@@ -84,14 +88,11 @@ export default function DataDesaView({ statistics, villageProfile }: DataDesaVie
   const [activeCategoryIndex, setActiveCategoryIndex] = useState<number>(0);
   const [selectedCategoryIndex, setSelectedCategoryIndex] = useState<number | null>(null);
   const activeCategory = statistics[activeCategoryIndex] || statistics[0];
+  const [selectedYear, setSelectedYear] = useState('all');
 
-  // Year filter states
-  const [selectedYear, setSelectedYear] = useState<string>('2026');
-  const [startYear, setStartYear] = useState<string>('2023');
-  const [endYear, setEndYear] = useState<string>('2026');
-  const [granularity, setGranularity] = useState<'tahunan' | 'triwulan' | 'bulanan'>('tahunan');
-
-  const yearsList = ['2023', '2024', '2025', '2026'];
+  useEffect(() => {
+    setSelectedYear('all');
+  }, [activeCategory?.id]);
 
   const getCategoryMeta = (cat: StatisticCategory) => {
     const metaKey = Object.keys(STAT_CARD_META).find((key) => cat.id.includes(key));
@@ -107,14 +108,6 @@ export default function DataDesaView({ statistics, villageProfile }: DataDesaVie
     };
   };
 
-  const getCategoryTotal = (cat: StatisticCategory) => cat.items.reduce((acc, curr) => acc + curr.value, 0);
-
-  const getTopItem = (cat: StatisticCategory) =>
-    cat.items.reduce<StatisticCategory['items'][number] | null>((top, item) => {
-      if (!top || item.value > top.value) return item;
-      return top;
-    }, null);
-
   const getChartTypeLabel = (type: StatisticCategory['type']) => {
     switch (type) {
       case 'bar':
@@ -129,92 +122,59 @@ export default function DataDesaView({ statistics, villageProfile }: DataDesaVie
     }
   };
 
-  // Factor to scale values to show differences per year
-  const getYearMultiplier = (year: string) => {
-    switch(year) {
-      case '2023': return 0.88;
-      case '2024': return 0.92;
-      case '2025': return 0.96;
-      case '2026':
-      default: return 1.0;
-    }
-  };
-
-  // 1. Process standard chart data scaled by year
-  const processedItems = (activeCategory?.items || []).map(item => ({
-    ...item,
-    value: Math.round(item.value * getYearMultiplier(selectedYear))
-  }));
-
-  // 2. Process time-series based on activeCategory (Used for Line Charts)
-  const generateTimeSeriesData = () => {
-    const start = parseInt(startYear);
-    const end = parseInt(endYear);
-    const selectedYears = Array.from({ length: Math.max(1, end - start + 1) }, (_, i) => String(start + i));
-
-    const records: { label: string; value: number }[] = [];
-
-    selectedYears.forEach(yr => {
-      const mult = getYearMultiplier(yr);
-      
-      if (granularity === 'bulanan') {
-        const months = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
-        months.forEach((m, mIdx) => {
-          const baseSum = (activeCategory?.items || []).reduce((acc, curr) => acc + curr.value, 0) / ((activeCategory?.items || []).length || 1);
-          const monthFactor = 0.8 + Math.sin((mIdx / 11) * Math.PI) * 0.4;
-          records.push({
-            label: `${m} ${yr}`,
-            value: Math.round(baseSum * mult * monthFactor * 0.15 + 10)
-          });
-        });
-      } else if (granularity === 'triwulan') {
-        const quarters = ['Q1', 'Q2', 'Q3', 'Q4'];
-        quarters.forEach((q, qIdx) => {
-          const baseSum = (activeCategory?.items || []).reduce((acc, curr) => acc + curr.value, 0) / ((activeCategory?.items || []).length || 1);
-          const qFactor = 0.9 + Math.cos((qIdx / 3) * Math.PI) * 0.2;
-          records.push({
-            label: `${q} ${yr}`,
-            value: Math.round(baseSum * mult * qFactor * 0.45 + 25)
-          });
-        });
-      } else {
-        // Tahunan
-        (activeCategory?.items || []).forEach(item => {
-          records.push({
-            label: `${item.label} (${yr})`,
-            value: Math.round(item.value * mult)
-          });
-        });
-      }
-    });
-
-    return records;
-  };
-
-  const chartData = activeCategory?.type === 'line' ? generateTimeSeriesData() : processedItems;
-  const total = chartData.reduce((acc, curr) => acc + curr.value, 0) || 0;
+  const activePresentation = activeCategory
+    ? getStatisticPresentation(activeCategory, selectedYear)
+    : null;
+  const structuredLeaves = activePresentation?.isStructured
+    ? activePresentation.leaves
+    : [];
+  const structuredHeaderRows =
+    activePresentation?.isStructured && activeCategory?.table
+      ? buildStatisticHeaderRows(activeCategory.table.columns)
+      : [];
+  const exportCategory =
+    activePresentation && activeCategory
+      ? selectedYear === 'all'
+        ? activePresentation.filteredCategory
+        : {
+            ...activePresentation.filteredCategory,
+            id: `${activeCategory.id}_${selectedYear}`,
+            description: `${activeCategory.description} Filter ${activePresentation.yearLeaf?.column.label || 'Tahun'}: ${selectedYear}.`,
+          }
+      : null;
+  const hasChartData = Boolean(
+    activePresentation &&
+      activePresentation.series.length > 0 &&
+      (activeCategory?.type === 'pie' || activeCategory?.type === 'donut'
+        ? activePresentation.pieData.length > 0
+        : activePresentation.chartRows.length > 0),
+  );
 
   const handleDownloadCSV = () => {
-    if (!activeCategory) return;
-    exportToCSV({ ...activeCategory, items: chartData });
+    if (!exportCategory) return;
+    exportToCSV(exportCategory);
   };
 
   const handleDownloadExcel = () => {
-    if (!activeCategory) return;
-    exportToExcel({ ...activeCategory, items: chartData });
+    if (!exportCategory) return;
+    void downloadStatisticWorkbook(exportCategory);
   };
 
   const handleDownloadPDF = () => {
-    if (!activeCategory) return;
-    exportToPDF({ ...activeCategory, items: chartData }, villageProfile);
+    if (!exportCategory) return;
+    exportToPDF(exportCategory, villageProfile);
   };
 
   const handleDownloadChart = (format: 'png' | 'jpeg' | 'jpg') => {
     if (!activeCategory) return;
-    exportChartToImage('active-recharts-pane', format, `${activeCategory.id}_stat_grafik`);
+    exportChartToImage(
+      'active-recharts-pane',
+      format,
+      `${activeCategory.id}${selectedYear === 'all' ? '' : `_${selectedYear}`}_stat_grafik`,
+    );
   };
 
-  if (statistics.length === 0) {
+  if (!activeCategory || !activePresentation) {
     return (
       <div className="bg-white rounded-3xl border border-gray-100 p-12 text-center text-gray-500 shadow-sm">
         Data statistik {villageProfile.name} belum dikonfigurasi.
@@ -250,8 +210,7 @@ export default function DataDesaView({ statistics, villageProfile }: DataDesaVie
         <div className="space-y-4">
           {statistics.map((cat, index) => {
             const meta = getCategoryMeta(cat);
-            const totalValue = getCategoryTotal(cat);
-            const topItem = getTopItem(cat);
+            const summary = getStatisticPresentation(cat);
 
             return (
               <button
@@ -278,12 +237,12 @@ export default function DataDesaView({ statistics, villageProfile }: DataDesaVie
                   </div>
 
                   <div className="p-5 md:p-6 space-y-4">
-                    <div className="space-y-2">
-                      <div className="flex flex-wrap items-center gap-3 text-[10px] font-bold text-gray-400 uppercase tracking-wider">
-                        <span className="flex items-center gap-1">
-                          <Calendar className="h-3.5 w-3.5 text-teal-600" />
-                          Data 2026
-                        </span>
+                      <div className="space-y-2">
+                        <div className="flex flex-wrap items-center gap-3 text-[10px] font-bold text-gray-400 uppercase tracking-wider">
+                          <span className="flex items-center gap-1">
+                            <Database className="h-3.5 w-3.5 text-teal-600" />
+                            {summary.rowCount} Baris · {summary.columnCount} Kolom
+                          </span>
                         <span className="h-3 w-px bg-gray-200" />
                         <span>{getChartTypeLabel(cat.type)}</span>
                       </div>
@@ -297,12 +256,14 @@ export default function DataDesaView({ statistics, villageProfile }: DataDesaVie
 
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                       <div className="rounded-xl bg-gray-50 border border-gray-100 px-3 py-2">
-                        <p className="text-[10px] font-bold text-gray-400 uppercase">Total Data</p>
-                        <p className="mt-1 text-sm font-black text-gray-900">{totalValue.toLocaleString('id-ID')}</p>
+                        <p className="text-[10px] font-bold text-gray-400 uppercase">Isi Tabel</p>
+                        <p className="mt-1 text-sm font-black text-gray-900">
+                          {summary.rowCount} baris
+                        </p>
                       </div>
                       <div className="rounded-xl bg-gray-50 border border-gray-100 px-3 py-2">
                         <p className="text-[10px] font-bold text-gray-400 uppercase">Sorotan</p>
-                        <p className="mt-1 text-sm font-black text-gray-900 truncate">{topItem?.label || '-'}</p>
+                        <p className="mt-1 text-sm font-black text-gray-900 truncate">{summary.topItem?.label || '-'}</p>
                       </div>
                       <div className="rounded-xl bg-gray-50 border border-gray-100 px-3 py-2">
                         <p className="text-[10px] font-bold text-gray-400 uppercase">Sumber</p>
@@ -363,9 +324,18 @@ export default function DataDesaView({ statistics, villageProfile }: DataDesaVie
             <p>
               Dataset ini menjelaskan {getCategoryMeta(activeCategory).focus.toLowerCase()} berdasarkan rekap data {villageProfile.name}. Informasi disajikan untuk membantu warga, aparatur, dan pemangku kepentingan membaca kondisi wilayah secara cepat sebelum melihat grafik rinci.
             </p>
-            <p>
-              Total nilai yang tercatat pada kategori ini adalah <strong className="text-gray-900">{getCategoryTotal(activeCategory).toLocaleString('id-ID')}</strong>. Indikator dengan nilai terbesar saat ini adalah <strong className="text-gray-900">{getTopItem(activeCategory)?.label || '-'}</strong>, sehingga dapat menjadi perhatian utama dalam evaluasi layanan dan perencanaan program.
-            </p>
+            {activePresentation.numericColumnCount > 0 ? (
+              <p>
+                Tabel memuat <strong className="text-gray-900">{activePresentation.rowCount} baris</strong> dan <strong className="text-gray-900">{activePresentation.columnCount} kolom</strong>. Total seluruh sel angka yang sedang ditampilkan adalah <strong className="text-gray-900">{activePresentation.total.toLocaleString('id-ID')}</strong>
+                {activePresentation.topItem ? (
+                  <> dengan nilai terbesar pada <strong className="text-gray-900">{activePresentation.topItem.label}</strong>.</>
+                ) : '.'}
+              </p>
+            ) : (
+              <p>
+                Tabel memuat <strong className="text-gray-900">{activePresentation.rowCount} baris</strong> dan <strong className="text-gray-900">{activePresentation.columnCount} kolom</strong>. Grafik tidak dibuat karena struktur tabel belum memiliki kolom bertipe angka.
+              </p>
+            )}
           </div>
         </div>
 
@@ -380,8 +350,12 @@ export default function DataDesaView({ statistics, villageProfile }: DataDesaVie
               <span className="text-xs font-black text-gray-900">{getChartTypeLabel(activeCategory.type)}</span>
             </div>
             <div className="flex items-center justify-between rounded-xl bg-gray-50 border border-gray-100 px-4 py-3">
-              <span className="text-xs font-bold text-gray-500">Jumlah Indikator</span>
-              <span className="text-xs font-black text-gray-900">{activeCategory.items.length} Parameter</span>
+              <span className="text-xs font-bold text-gray-500">Ukuran Tabel</span>
+              <span className="text-xs font-black text-gray-900">{activePresentation.rowCount} baris · {activePresentation.columnCount} kolom</span>
+            </div>
+            <div className="flex items-center justify-between rounded-xl bg-gray-50 border border-gray-100 px-4 py-3">
+              <span className="text-xs font-bold text-gray-500">Kolom Angka</span>
+              <span className="text-xs font-black text-gray-900">{activePresentation.numericColumnCount} kolom</span>
             </div>
             <div className="flex items-center justify-between rounded-xl bg-gray-50 border border-gray-100 px-4 py-3">
               <span className="text-xs font-bold text-gray-500">Sumber Data</span>
@@ -405,64 +379,27 @@ export default function DataDesaView({ statistics, villageProfile }: DataDesaVie
               </p>
             </div>
 
-            {/* YEAR & TIME RANGE FILTER SELECTORS */}
-            <div className="flex items-center gap-2 shrink-0 self-start md:self-center">
-              {activeCategory.type === 'line' ? (
-                /* Time Series Controls */
-                <div className="flex flex-wrap items-center gap-2 bg-gray-50 p-2 rounded-xl border border-gray-150">
-                  <div className="flex items-center gap-1">
-                    <Calendar className="h-3.5 w-3.5 text-indigo-600" />
-                    <select
-                      value={startYear}
-                      onChange={(e) => setStartYear(e.target.value)}
-                      className="bg-white border border-gray-200 rounded p-1 text-[11px] font-bold text-gray-750"
-                    >
-                      {yearsList.map(y => (
-                        <option key={y} value={y} disabled={parseInt(y) > parseInt(endYear)}>{y}</option>
-                      ))}
-                    </select>
-                    <span className="text-[10px] text-gray-400 font-bold">s/d</span>
-                    <select
-                      value={endYear}
-                      onChange={(e) => setEndYear(e.target.value)}
-                      className="bg-white border border-gray-200 rounded p-1 text-[11px] font-bold text-gray-750"
-                    >
-                      {yearsList.map(y => (
-                        <option key={y} value={y} disabled={parseInt(y) < parseInt(startYear)}>{y}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div className="h-4 w-px bg-gray-200" />
-                  <div className="flex items-center gap-1">
-                    <Layers className="h-3.5 w-3.5 text-indigo-600" />
-                    <select
-                      value={granularity}
-                      onChange={(e) => setGranularity(e.target.value as any)}
-                      className="bg-white border border-gray-200 rounded p-1 text-[11px] font-bold text-gray-750"
-                    >
-                      <option value="tahunan">Tahunan</option>
-                      <option value="triwulan">Triwulan</option>
-                      <option value="bulanan">Bulanan</option>
-                    </select>
-                  </div>
-                </div>
-              ) : (
-                /* Standard Chart Year Select */
-                <div className="flex items-center gap-1.5 bg-gray-50 px-3 py-1.5 rounded-xl border border-gray-150">
+            {activePresentation.yearLeaf &&
+              activePresentation.availableYears.length > 0 && (
+                <label className="flex shrink-0 items-center gap-1.5 self-start rounded-xl border border-gray-150 bg-gray-50 px-3 py-2 md:self-center">
                   <Calendar className="h-3.5 w-3.5 text-indigo-600" />
-                  <span className="text-[11px] font-bold text-gray-500 uppercase">Tahun Data:</span>
+                  <span className="text-[11px] font-bold uppercase text-gray-500">
+                    {activePresentation.yearLeaf.column.label}:
+                  </span>
                   <select
                     value={selectedYear}
-                    onChange={(e) => setSelectedYear(e.target.value)}
-                    className="bg-white border border-gray-200 rounded p-1 text-[11px] font-bold text-gray-700"
+                    onChange={(event) => setSelectedYear(event.target.value)}
+                    className="rounded border border-gray-200 bg-white p-1 text-[11px] font-bold text-gray-700"
                   >
-                    {yearsList.map(yr => (
-                      <option key={yr} value={yr}>{yr}</option>
+                    <option value="all">Semua</option>
+                    {activePresentation.availableYears.map((year) => (
+                      <option key={year} value={year}>
+                        {year}
+                      </option>
                     ))}
                   </select>
-                </div>
+                </label>
               )}
-            </div>
           </div>
 
           {/* Interactive Recharts container */}
@@ -470,45 +407,99 @@ export default function DataDesaView({ statistics, villageProfile }: DataDesaVie
             id="active-recharts-pane"
             className="w-full h-[320px] md:h-[380px] bg-gray-50/50 rounded-2xl border border-gray-100 p-4 md:p-6 flex items-center justify-center relative shadow-inner overflow-hidden"
           >
-            {chartData.length === 0 ? (
-              <div className="text-gray-400 font-medium text-xs">Kosong, belum ada nilai parameter.</div>
+            {!hasChartData ? (
+              <div className="px-6 text-center text-xs font-medium leading-relaxed text-gray-400">
+                Grafik belum dapat dibuat. Pastikan tabel memiliki baris data dan
+                minimal satu kolom bertipe angka.
+              </div>
             ) : (
               <ResponsiveContainer width="100%" height="100%">
-                {/* Dynamically render whichever diagram type matches the configuration */}
                 {activeCategory.type === 'bar' ? (
-                  <BarChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                  <BarChart data={activePresentation.chartRows} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
                     <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E7EB" />
-                    <XAxis dataKey="label" stroke="#6B7280" tick={{ fontSize: 10 }} />
-                    <YAxis stroke="#6B7280" tick={{ fontSize: 10 }} />
+                    <XAxis
+                      dataKey="label"
+                      stroke="#6B7280"
+                      tick={{ fontSize: 10 }}
+                      tickFormatter={(value) => {
+                        const label = String(value);
+                        return label.length > 18 ? `${label.slice(0, 18)}…` : label;
+                      }}
+                    />
+                    <YAxis
+                      stroke="#6B7280"
+                      tick={{ fontSize: 10 }}
+                      tickFormatter={(value) =>
+                        Number(value).toLocaleString('id-ID', {
+                          notation: 'compact',
+                          maximumFractionDigits: 1,
+                        })
+                      }
+                    />
                     <Tooltip cursor={{ fill: 'rgba(13, 148, 136, 0.05)' }} contentStyle={{ borderRadius: '12px', border: '1px solid #E5E7EB', fontSize: '12px' }} />
-                    <Bar dataKey="value" fill="#4f46e5" radius={[4, 4, 0, 0]} barSize={28}>
-                      {chartData.map((entry, idx) => (
-                        <Cell key={`cell-${idx}`} fill={COLORS[idx % COLORS.length]} />
-                      ))}
-                    </Bar>
+                    {activePresentation.series.length > 1 && (
+                      <Legend wrapperStyle={{ fontSize: '10px', paddingTop: '10px' }} />
+                    )}
+                    {activePresentation.series.map((series, seriesIndex) => (
+                      <Bar
+                        key={series.key}
+                        dataKey={series.key}
+                        name={series.label}
+                        fill={COLORS[seriesIndex % COLORS.length]}
+                        radius={[4, 4, 0, 0]}
+                        maxBarSize={36}
+                      >
+                        {activePresentation.series.length === 1 &&
+                          activePresentation.chartRows.map((_, rowIndex) => (
+                            <Cell
+                              key={`cell-${rowIndex}`}
+                              fill={COLORS[rowIndex % COLORS.length]}
+                            />
+                          ))}
+                      </Bar>
+                    ))}
                   </BarChart>
                 ) : activeCategory.type === 'line' ? (
-                  <LineChart data={chartData} margin={{ top: 15, right: 15, left: -15, bottom: 0 }}>
+                  <LineChart data={activePresentation.chartRows} margin={{ top: 15, right: 15, left: 0, bottom: 0 }}>
                     <CartesianGrid strokeDasharray="4 4" stroke="#E5E7EB" />
-                    <XAxis dataKey="label" stroke="#6B7280" tick={{ fontSize: 9 }} />
-                    <YAxis stroke="#6B7280" tick={{ fontSize: 10 }} />
+                    <XAxis
+                      dataKey="label"
+                      stroke="#6B7280"
+                      tick={{ fontSize: 9 }}
+                      tickFormatter={(value) => {
+                        const label = String(value);
+                        return label.length > 18 ? `${label.slice(0, 18)}…` : label;
+                      }}
+                    />
+                    <YAxis
+                      stroke="#6B7280"
+                      tick={{ fontSize: 10 }}
+                      tickFormatter={(value) =>
+                        Number(value).toLocaleString('id-ID', {
+                          notation: 'compact',
+                          maximumFractionDigits: 1,
+                        })
+                      }
+                    />
                     <Tooltip contentStyle={{ borderRadius: '12px', border: '1px solid #E5E7EB', fontSize: '12px' }} />
                     <Legend wrapperStyle={{ fontSize: '11px', paddingTop: '10px' }} />
-                    <Line
-                      name={`${activeCategory.title.split(' ').slice(-1)[0] || 'Hasil'} (${granularity === 'bulanan' ? 'Bulanan' : granularity === 'triwulan' ? 'Triwulan' : 'Tahunan'})`}
-                      type="monotone"
-                      dataKey="value"
-                      stroke="#4f46e5"
-                      strokeWidth={3}
-                      activeDot={{ r: 8 }}
-                      dot={{ r: 5, strokeWidth: 2 }}
-                    />
+                    {activePresentation.series.map((series, seriesIndex) => (
+                      <Line
+                        key={series.key}
+                        name={series.label}
+                        type="monotone"
+                        dataKey={series.key}
+                        stroke={COLORS[seriesIndex % COLORS.length]}
+                        strokeWidth={3}
+                        activeDot={{ r: 7 }}
+                        dot={{ r: 4, strokeWidth: 2 }}
+                      />
+                    ))}
                   </LineChart>
                 ) : (
-                  // Pie or Donut implementations
                   <PieChart>
                     <Pie
-                      data={chartData}
+                      data={activePresentation.pieData}
                       cx="50%"
                       cy="48%"
                       nameKey="label"
@@ -519,7 +510,7 @@ export default function DataDesaView({ statistics, villageProfile }: DataDesaVie
                       fill="#8884d8"
                       dataKey="value"
                     >
-                      {chartData.map((entry, idx) => (
+                      {activePresentation.pieData.map((_, idx) => (
                         <Cell key={`cell-${idx}`} fill={COLORS[idx % COLORS.length]} />
                       ))}
                     </Pie>
@@ -540,22 +531,25 @@ export default function DataDesaView({ statistics, villageProfile }: DataDesaVie
             <div className="flex gap-2">
               <button
                 id="export-png-btn"
+                disabled={!hasChartData}
                 onClick={() => handleDownloadChart('png')}
-                className="px-3 py-1.5 border border-gray-200 hover:border-teal-500 hover:bg-teal-50 text-gray-700 hover:text-teal-800 text-[11px] font-bold rounded-lg transition-all active:scale-95 cursor-pointer"
+                className="px-3 py-1.5 border border-gray-200 hover:border-teal-500 hover:bg-teal-50 text-gray-700 hover:text-teal-800 text-[11px] font-bold rounded-lg transition-all active:scale-95 cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
               >
                 Unduh PNG
               </button>
               <button
                 id="export-jpg-btn"
+                disabled={!hasChartData}
                 onClick={() => handleDownloadChart('jpg')}
-                className="px-3 py-1.5 border border-gray-200 hover:border-teal-500 hover:bg-teal-50 text-gray-700 hover:text-teal-800 text-[11px] font-bold rounded-lg transition-all active:scale-95 cursor-pointer"
+                className="px-3 py-1.5 border border-gray-200 hover:border-teal-500 hover:bg-teal-50 text-gray-700 hover:text-teal-800 text-[11px] font-bold rounded-lg transition-all active:scale-95 cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
               >
                 Unduh JPG
               </button>
               <button
                 id="export-jpeg-btn"
+                disabled={!hasChartData}
                 onClick={() => handleDownloadChart('jpeg')}
-                className="px-3 py-1.5 border border-gray-200 hover:border-teal-500 hover:bg-teal-50 text-gray-700 hover:text-teal-800 text-[11px] font-bold rounded-lg transition-all active:scale-95 cursor-pointer"
+                className="px-3 py-1.5 border border-gray-200 hover:border-teal-500 hover:bg-teal-50 text-gray-700 hover:text-teal-800 text-[11px] font-bold rounded-lg transition-all active:scale-95 cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
               >
                 Unduh JPEG
               </button>
@@ -572,7 +566,8 @@ export default function DataDesaView({ statistics, villageProfile }: DataDesaVie
               <span>Dokumen Statistik Resmi</span>
             </h4>
             <p className="text-teal-300 text-xs">
-              Unduh data numerik mentah terlampir dalam format dokumen tabel resmi pemerintah atau cetak sebagai surat laporan.
+              CSV, Excel, dan PDF mengikuti susunan grup, kolom, serta baris
+              tabel{selectedYear !== 'all' ? ` untuk ${activePresentation.yearLeaf?.column.label || 'tahun'} ${selectedYear}` : ''}.
             </p>
 
             <div className="grid grid-cols-1 gap-2.5 pt-2">
@@ -585,7 +580,7 @@ export default function DataDesaView({ statistics, villageProfile }: DataDesaVie
                   <FileText className="h-4 w-4 text-emerald-400 group-hover:scale-110 transition-transform" />
                   <span>Unduh Dokumen CSV (.csv)</span>
                 </span>
-                <span className="text-[10px] bg-teal-800 px-2 py-0.5 rounded text-teal-300">Data Mandiri</span>
+                <span className="text-[10px] bg-teal-800 px-2 py-0.5 rounded text-teal-300">Tabel Aktif</span>
               </button>
 
               <button
@@ -597,7 +592,7 @@ export default function DataDesaView({ statistics, villageProfile }: DataDesaVie
                   <FileSpreadsheet className="h-4 w-4 text-amber-400 group-hover:scale-110 transition-transform" />
                   <span>Unduh Dokumen Excel (.xlsx)</span>
                 </span>
-                <span className="text-[10px] bg-amber-950 px-2 py-0.5 rounded text-amber-300 font-semibold uppercase font-mono">XLS</span>
+                <span className="text-[10px] bg-amber-950 px-2 py-0.5 rounded text-amber-300 font-semibold uppercase font-mono">XLSX</span>
               </button>
 
               <button
@@ -619,38 +614,105 @@ export default function DataDesaView({ statistics, villageProfile }: DataDesaVie
             <div className="flex items-center justify-between pb-3 border-b border-gray-150">
               <h4 className="font-extrabold text-sm text-gray-900 flex items-center gap-1.5">
                 <BarChart3 className="h-4 w-4 text-teal-600" />
-                Raw Spreadsheet Data
+                Tabel Data Statistik
               </h4>
               <span className="text-[10px] font-extrabold text-teal-800 bg-teal-100 px-2 py-0.5 rounded">
-                N = {total.toLocaleString('id-ID')}
+                {activePresentation.rowCount} baris
               </span>
             </div>
 
             <div className="overflow-x-auto rounded-xl border border-gray-200">
-              <table className="w-full text-left text-xs text-gray-600 border-collapse">
-                <thead className="bg-gray-50/50 text-gray-800 font-bold border-b border-gray-200">
-                  <tr>
-                    <th className="p-3">Indikator Parameter</th>
-                    <th className="p-3 text-right">Nilai Angka</th>
-                    <th className="p-3 text-right">Mata Persen</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {chartData.map((item, idx) => {
-                    const percentage = total > 0 ? ((item.value / total) * 100).toFixed(1) : '0.0';
-                    return (
-                      <tr key={idx} className="hover:bg-gray-50 transition-colors">
-                        <td className="p-3 font-semibold text-gray-800 flex items-center space-x-2">
-                          <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: COLORS[idx % COLORS.length] }} />
-                          <span>{item.label}</span>
-                        </td>
-                        <td className="p-3 text-right font-mono font-bold text-gray-900">{item.value.toLocaleString('id-ID')}</td>
-                        <td className="p-3 text-right text-gray-500 font-medium font-mono">{percentage}%</td>
+              {activeCategory.table ? (
+                <table className="min-w-full border-collapse text-xs text-gray-600">
+                  <thead className="bg-teal-50 text-teal-950">
+                    {structuredHeaderRows.map((headerRow, rowIndex) => (
+                      <tr key={rowIndex}>
+                        {headerRow.map(({ column, colSpan, rowSpan }) => (
+                          <th
+                            key={column.id}
+                            colSpan={colSpan}
+                            rowSpan={rowSpan}
+                            className="min-w-32 border border-teal-100 p-3 text-center font-extrabold"
+                          >
+                            {column.label}
+                          </th>
+                        ))}
                       </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+                    ))}
+                  </thead>
+                  <tbody>
+                    {activePresentation.filteredTable.rows.length === 0 ? (
+                      <tr>
+                        <td
+                          colSpan={structuredLeaves.length}
+                          className="p-8 text-center italic text-gray-400"
+                        >
+                          Belum ada baris data.
+                        </td>
+                      </tr>
+                    ) : (
+                      activePresentation.filteredTable.rows.map((row) => (
+                        <tr key={row.id} className="hover:bg-gray-50">
+                          {structuredLeaves.map((leaf) => {
+                            const value = row.values[leaf.column.id] ?? '';
+                            return (
+                              <td
+                                key={leaf.column.id}
+                                className={`border border-gray-100 p-3 ${
+                                  leaf.column.dataType === 'number'
+                                    ? 'text-right font-mono font-bold text-gray-900'
+                                    : 'font-semibold text-gray-800'
+                                }`}
+                              >
+                                {typeof value === 'number'
+                                  ? value.toLocaleString('id-ID')
+                                  : value}
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              ) : (
+                <table className="w-full border-collapse text-left text-xs text-gray-600">
+                  <thead className="border-b border-gray-200 bg-gray-50/50 font-bold text-gray-800">
+                    <tr>
+                      <th className="p-3">Indikator Parameter</th>
+                      <th className="p-3 text-right">Nilai Angka</th>
+                      <th className="p-3 text-right">Mata Persen</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {activePresentation.pieData.map((item, idx) => {
+                      const percentage =
+                        activePresentation.total > 0
+                          ? ((item.value / activePresentation.total) * 100).toFixed(1)
+                          : '0.0';
+                      return (
+                        <tr key={idx} className="hover:bg-gray-50 transition-colors">
+                          <td className="flex items-center space-x-2 p-3 font-semibold text-gray-800">
+                            <span
+                              className="h-2.5 w-2.5 rounded-full"
+                              style={{
+                                backgroundColor: COLORS[idx % COLORS.length],
+                              }}
+                            />
+                            <span>{item.label}</span>
+                          </td>
+                          <td className="p-3 text-right font-mono font-bold text-gray-900">
+                            {item.value.toLocaleString('id-ID')}
+                          </td>
+                          <td className="p-3 text-right font-mono font-medium text-gray-500">
+                            {percentage}%
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
             </div>
           </div>
         </div>

@@ -4,6 +4,12 @@
  */
 
 import { StatisticCategory, VillageProfile } from '../types';
+import {
+  buildStatisticHeaderRows,
+  getStatisticLeafColumns,
+  getStatisticTable,
+  statisticHeaderLabel,
+} from './statisticTable';
 
 const escapeHtml = (value: string | number) =>
   String(value)
@@ -17,25 +23,24 @@ const escapeHtml = (value: string | number) =>
  * Downloads data as a CSV file.
  */
 export function exportToCSV(category: StatisticCategory): void {
-  const headers = ['Kategori/Keterangan', 'Jumlah/Nilai'];
-  const rows = category.items.map(item => [
-    `"${item.label.replace(/"/g, '""')}"`,
-    item.value
-  ]);
-
+  const table = getStatisticTable(category);
+  const leaves = getStatisticLeafColumns(table.columns);
+  const csvCell = (value: string | number) =>
+    `"${String(value).replace(/"/g, '""')}"`;
   const csvContent = [
-    `"${category.title.replace(/"/g, '""')}"`,
-    `"${category.description.replace(/"/g, '""')}"`,
-    '',
-    headers.join(','),
-    ...rows.map(e => e.join(','))
-  ].join('\n');
+    leaves.map((leaf) => csvCell(statisticHeaderLabel(leaf))).join(','),
+    ...table.rows.map((row) =>
+      leaves
+        .map((leaf) => csvCell(row.values[leaf.column.id] ?? ''))
+        .join(','),
+    ),
+  ].join('\r\n');
 
   const blob = new Blob([new Uint8Array([0xEF, 0xBB, 0xBF]), csvContent], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.setAttribute('href', url);
-  link.setAttribute('download', `${category.id}_data_desa.csv`);
+  link.setAttribute('download', `${category.id}_data_tabel.csv`);
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
@@ -152,7 +157,56 @@ export function exportToPDF(category: StatisticCategory, villageProfile: Village
     day: 'numeric'
   });
 
-  const total = category.items.reduce((sum, item) => sum + item.value, 0);
+  const table = getStatisticTable(category);
+  const leaves = getStatisticLeafColumns(table.columns);
+  const headerRows = buildStatisticHeaderRows(table.columns);
+  const printableHeader = headerRows
+    .map(
+      (row, rowIndex) => `
+        <tr>
+          ${
+            rowIndex === 0
+              ? `<th rowspan="${headerRows.length}" style="width: 42px; text-align: center;">No</th>`
+              : ''
+          }
+          ${row
+            .map(
+              ({ column, colSpan, rowSpan }) => `
+                <th colspan="${colSpan}" rowspan="${rowSpan}" style="text-align: center;">
+                  ${escapeHtml(column.label)}
+                </th>
+              `,
+            )
+            .join('')}
+        </tr>
+      `,
+    )
+    .join('');
+  const printableRows = table.rows
+    .map(
+      (row, index) => `
+        <tr>
+          <td style="text-align: center;">${index + 1}</td>
+          ${leaves
+            .map((leaf) => {
+              const value = row.values[leaf.column.id] ?? '';
+              const displayedValue =
+                typeof value === 'number'
+                  ? value.toLocaleString('id-ID')
+                  : value;
+              return `
+                <td style="${
+                  leaf.column.dataType === 'number'
+                    ? 'text-align: right; font-weight: 600;'
+                    : ''
+                }">${escapeHtml(displayedValue)}</td>
+              `;
+            })
+            .join('')}
+        </tr>
+      `,
+    )
+    .join('');
   const unitLabel = villageProfile.contentLabel || (villageProfile.administrationLevel === 'kecamatan' ? 'Kecamatan' : villageProfile.administrationLevel === 'kelurahan' ? 'Kelurahan' : 'Desa');
   const headRole = villageProfile.headRole || (unitLabel === 'Kecamatan' ? 'Camat' : unitLabel === 'Kelurahan' ? 'Lurah' : 'Kepala Desa');
   const officeLabel = villageProfile.officeLabel || `Kantor ${unitLabel}`;
@@ -171,6 +225,10 @@ export function exportToPDF(category: StatisticCategory, villageProfile: Village
         <title>LAPORAN STATISTIK ${escapeHtml(villageProfile.name).toUpperCase()}</title>
         <style>
           @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+          @page {
+            size: ${leaves.length > 4 ? 'A4 landscape' : 'A4 portrait'};
+            margin: 12mm;
+          }
           body {
             font-family: 'Inter', sans-serif;
             color: #111827;
@@ -261,14 +319,15 @@ export function exportToPDF(category: StatisticCategory, villageProfile: Village
             width: 100%;
             border-collapse: collapse;
             margin: 20px 0;
-            font-size: 14px;
+            font-size: ${leaves.length > 8 ? '8px' : leaves.length > 5 ? '10px' : '12px'};
+            table-layout: fixed;
           }
           .data-table th {
             background-color: #f3f4f6;
             border: 1px solid #d1d5db;
             padding: 12px;
             font-weight: 600;
-            text-align: left;
+            text-align: center;
             text-transform: uppercase;
             font-size: 12px;
             color: #374151;
@@ -276,6 +335,7 @@ export function exportToPDF(category: StatisticCategory, villageProfile: Village
           .data-table td {
             border: 1px solid #d1d5db;
             padding: 10px 12px;
+            overflow-wrap: anywhere;
           }
           .data-table tr.total-row {
             font-weight: 700;
@@ -345,28 +405,20 @@ export function exportToPDF(category: StatisticCategory, villageProfile: Village
             <td class="label">Uraian Kategori</td>
             <td colspan="3">: ${escapeHtml(category.description)}</td>
           </tr>
+          <tr>
+            <td class="label">Struktur Tabel</td>
+            <td>: ${table.rows.length} baris, ${leaves.length} kolom</td>
+            <td class="label">Kolom Angka</td>
+            <td>: ${leaves.filter((leaf) => leaf.column.dataType === 'number').length}</td>
+          </tr>
         </table>
 
         <table class="data-table">
           <thead>
-            <tr>
-              <th style="width: 10%">No</th>
-              <th style="width: 60%">Item / Indikator Statistik</th>
-              <th style="width: 30%; text-align: right;">Jumlah Penduduk / Volume</th>
-            </tr>
+            ${printableHeader}
           </thead>
           <tbody>
-            ${category.items.map((item, index) => `
-              <tr>
-                <td>${index + 1}</td>
-                <td>${escapeHtml(item.label)}</td>
-                <td style="text-align: right; font-weight: 600;">${item.value.toLocaleString('id-ID')}</td>
-              </tr>
-            `).join('')}
-            <tr class="total-row">
-              <td colspan="2" style="text-align: right;">Total Nilai Terdata:</td>
-              <td style="text-align: right; color: #0f766e;">${total.toLocaleString('id-ID')}</td>
-            </tr>
+            ${printableRows || `<tr><td colspan="${leaves.length + 1}" style="text-align: center;">Belum ada data.</td></tr>`}
           </tbody>
         </table>
 

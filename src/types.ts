@@ -14,8 +14,29 @@ export interface News {
 }
 
 export interface StatisticItem {
+  id?: string;
   label: string;
   value: number;
+}
+
+export type StatisticCellValue = string | number;
+
+export interface StatisticTableColumn {
+  id: string;
+  label: string;
+  kind: 'group' | 'column';
+  dataType?: 'text' | 'number';
+  children?: StatisticTableColumn[];
+}
+
+export interface StatisticTableRow {
+  id: string;
+  values: Record<string, StatisticCellValue>;
+}
+
+export interface StatisticTable {
+  columns: StatisticTableColumn[];
+  rows: StatisticTableRow[];
 }
 
 export interface StatisticCategory {
@@ -24,6 +45,11 @@ export interface StatisticCategory {
   description: string;
   type: 'bar' | 'line' | 'pie' | 'donut';
   items: StatisticItem[];
+  /**
+   * Struktur tabel fleksibel untuk dataset baru. `items` tetap disimpan sebagai
+   * proyeksi data numerik agar grafik dan data lama tetap kompatibel.
+   */
+  table?: StatisticTable;
 }
 
 export interface GalleryItem {
@@ -47,7 +73,7 @@ export interface AdminProfile {
   name: string;
   username: string;
   email: string;
-  password?: string; // stored plainly in client-side localStorage simulation
+  password?: string; // only used as a transient new-password form value
   avatarUrl: string;
   role?: 'super_admin' | 'admin';
   assignedEntityId?: string;

@@ -4,10 +4,9 @@
  */
 
 import React, { useEffect, useMemo, useState } from 'react';
-import { Landmark, Mail, Phone, MapPin, Key, X, Lock, AlertCircle, Heart, Building2 } from 'lucide-react';
-
-import { VillageProfile, StatisticCategory, News, GalleryItem, AdminProfile, PortalData } from './types';
-import { INITIAL_ADMIN_USERS, INITIAL_PORTAL_DATA } from './data/initialData';
+import { Building2, Heart, Landmark, LogOut, Mail, MapPin, Phone } from 'lucide-react';
+import { AdminProfile, GalleryItem, News, PortalData, StatisticCategory, VillageProfile } from './types';
+import { ApiError, apiRequest, clearApiToken, getApiToken, setApiToken } from './services/api';
 
 import Navbar from './components/Navbar';
 import BerandaView from './components/BerandaView';
@@ -17,199 +16,309 @@ import PortalBeritaView from './components/PortalBeritaView';
 import GaleriView from './components/GaleriView';
 import KontakView from './components/KontakView';
 import AdminDashboard from './components/AdminDashboard';
+import AdminLoginPage from './components/AdminLoginPage';
+import type { DistrictEntitySummary } from './components/DistrictSummary';
 
-const PORTAL_DATA_STORAGE_KEY = 'tawalian_portal_data_v2';
 const ACTIVE_ENTITY_STORAGE_KEY = 'tawalian_active_entity_id_v3';
-const ADMIN_USERS_STORAGE_KEY = 'tawalian_admin_users_v2';
-const CURRENT_ADMIN_STORAGE_KEY = 'tawalian_current_admin_id_v1';
 const DEFAULT_ENTITY_ID = 'kecamatan-tawalian';
-
-const readStoredJson = <T,>(key: string, fallback: T): T => {
-  try {
-    const stored = localStorage.getItem(key);
-    return stored ? JSON.parse(stored) as T : fallback;
-  } catch {
-    localStorage.removeItem(key);
-    return fallback;
-  }
+const ANONYMOUS_ADMIN_PROFILE: AdminProfile = {
+  name: 'Admin',
+  username: '',
+  email: '',
+  avatarUrl: '',
 };
 
 export default function App() {
-  const [portalData, setPortalDataState] = useState<PortalData>(() => {
-    const stored = readStoredJson<PortalData | null>(PORTAL_DATA_STORAGE_KEY, null);
-    if (stored?.entities?.length) return stored;
-    localStorage.setItem(PORTAL_DATA_STORAGE_KEY, JSON.stringify(INITIAL_PORTAL_DATA));
-    return INITIAL_PORTAL_DATA;
-  });
+  const [portalData, setPortalData] = useState<PortalData | null>(null);
+  const [initializationError, setInitializationError] = useState<string | null>(null);
+  const [isInitializing, setIsInitializing] = useState(true);
+  const [activeEntityId, setActiveEntityIdState] = useState(
+    () => localStorage.getItem(ACTIVE_ENTITY_STORAGE_KEY) || DEFAULT_ENTITY_ID,
+  );
+  const [currentAdmin, setCurrentAdmin] = useState<AdminProfile | null>(null);
+  const [appView, setAppView] = useState<'public' | 'login' | 'admin'>('public');
+  const [districtEntities, setDistrictEntities] = useState<DistrictEntitySummary[]>([]);
+  const [currentTab, setCurrentTab] = useState('beranda');
+  const [selectedNews, setSelectedNews] = useState<News | null>(null);
 
-  const [activeEntityId, setActiveEntityIdState] = useState<string>(() => {
-    return localStorage.getItem(ACTIVE_ENTITY_STORAGE_KEY) || DEFAULT_ENTITY_ID;
-  });
-
-  const activeEntity = useMemo(() => {
-    return portalData.entities.find((entity) => entity.id === activeEntityId) || portalData.entities[0];
-  }, [activeEntityId, portalData.entities]);
-
+  const activeEntity = useMemo(
+    () =>
+      portalData?.entities.find((entity) => entity.id === activeEntityId) ||
+      portalData?.entities[0],
+    [activeEntityId, portalData],
+  );
   const selectedEntityId = activeEntity?.id || DEFAULT_ENTITY_ID;
+
+  useEffect(() => {
+    let mounted = true;
+    const initialize = async () => {
+      try {
+        const response = await apiRequest<{ data: PortalData }>('/api/portal');
+        if (mounted) setPortalData(response.data);
+
+        if (getApiToken()) {
+          try {
+            const session = await apiRequest<{ admin: AdminProfile }>('/api/auth/session');
+            if (mounted) setCurrentAdmin(session.admin);
+          } catch {
+            clearApiToken();
+          }
+        }
+      } catch (error) {
+        console.error('Backend tidak dapat dihubungi:', error);
+        if (mounted) {
+          setInitializationError(
+            error instanceof Error
+              ? error.message
+              : 'Backend atau database tidak dapat dihubungi.',
+          );
+        }
+      } finally {
+        if (mounted) setIsInitializing(false);
+      }
+    };
+    void initialize();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!activeEntity) return;
+    if (activeEntityId !== selectedEntityId) {
+      setActiveEntityIdState(selectedEntityId);
+      localStorage.setItem(ACTIVE_ENTITY_STORAGE_KEY, selectedEntityId);
+    }
+    setSelectedNews(null);
+  }, [activeEntity, activeEntityId, selectedEntityId]);
+
+  if (isInitializing || !activeEntity || !portalData) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-white flex items-center justify-center p-6">
+        <div className="w-full max-w-lg rounded-2xl border border-slate-800 bg-slate-900 p-8 text-center shadow-2xl">
+          <Landmark className="mx-auto h-10 w-10 text-teal-400" />
+          <h1 className="mt-4 text-xl font-black">
+            {isInitializing ? 'Menghubungkan ke database…' : 'Database belum siap'}
+          </h1>
+          {!isInitializing && (
+            <p className="mt-3 text-sm leading-6 text-slate-300">
+              {initializationError || 'Data portal belum tersedia di PostgreSQL.'}
+            </p>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   const villageProfile = activeEntity.content.profile;
   const statistics = activeEntity.content.statistics;
   const news = activeEntity.content.news;
   const gallery = activeEntity.content.gallery;
-  const unitLabel = villageProfile.contentLabel || (activeEntity.type === 'kecamatan' ? 'Kecamatan' : activeEntity.type === 'kelurahan' ? 'Kelurahan' : 'Desa');
-
-  const [adminUsers, setAdminUsersState] = useState<AdminProfile[]>(() => {
-    const stored = readStoredJson<AdminProfile[] | null>(ADMIN_USERS_STORAGE_KEY, null);
-    if (stored?.length) return stored;
-    localStorage.setItem(ADMIN_USERS_STORAGE_KEY, JSON.stringify(INITIAL_ADMIN_USERS));
-    return INITIAL_ADMIN_USERS;
-  });
-
-  const [currentAdminId, setCurrentAdminId] = useState<string | null>(() => localStorage.getItem(CURRENT_ADMIN_STORAGE_KEY));
-  const [currentTab, setCurrentTab] = useState<string>('beranda');
-  const [isAdminMode, setIsAdminMode] = useState<boolean>(false);
-  const currentAdmin = adminUsers.find((admin) => admin.id === currentAdminId || admin.username === currentAdminId) || null;
-  const adminProfile = currentAdmin || INITIAL_ADMIN_USERS[0];
-  const isSuperAdmin = currentAdmin?.role === 'super_admin';
-  const manageableEntities = isSuperAdmin
-    ? portalData.entities
-    : portalData.entities.filter((entity) => entity.id === currentAdmin?.assignedEntityId);
-  const visibleEntities = isAdminMode && currentAdmin ? manageableEntities : portalData.entities;
-  const dashboardEntity =
-    currentAdmin?.role === 'admin' && currentAdmin.assignedEntityId
-      ? portalData.entities.find((entity) => entity.id === currentAdmin.assignedEntityId) || activeEntity
-      : activeEntity;
-
-  const setPortalData = (nextData: PortalData | ((prev: PortalData) => PortalData)) => {
-    setPortalDataState((prev) => {
-      const resolved = typeof nextData === 'function' ? nextData(prev) : nextData;
-      localStorage.setItem(PORTAL_DATA_STORAGE_KEY, JSON.stringify(resolved));
-      return resolved;
-    });
-  };
-
-  const updateActiveEntityContent = (updates: Partial<typeof activeEntity.content>) => {
-    const targetEntityId =
-      currentAdmin?.role === 'admin' && currentAdmin.assignedEntityId
-        ? currentAdmin.assignedEntityId
-        : selectedEntityId;
-
-    setPortalData((prev) => ({
-      ...prev,
-      entities: prev.entities.map((entity) =>
-        entity.id === targetEntityId
-          ? { ...entity, content: { ...entity.content, ...updates } }
-          : entity,
-      ),
-    }));
-  };
+  const unitLabel =
+    villageProfile.contentLabel ||
+    (activeEntity.type === 'kecamatan'
+      ? 'Kecamatan'
+      : activeEntity.type === 'kelurahan'
+        ? 'Kelurahan'
+        : 'Desa');
 
   const setActiveEntityId = (entityId: string) => {
     setActiveEntityIdState(entityId);
     localStorage.setItem(ACTIVE_ENTITY_STORAGE_KEY, entityId);
   };
 
-  const setVillageProfile = (profile: VillageProfile) => {
-    updateActiveEntityContent({ profile });
-  };
+  const updateAssignedEntityContent = (updates: Partial<typeof activeEntity.content>) => {
+    if (!currentAdmin?.assignedEntityId) return;
+    if (currentAdmin.role === 'super_admin' && updates.statistics !== undefined) return;
+    const entityId = currentAdmin.assignedEntityId;
+    const previousContent = portalData.entities.find(
+      (entity) => entity.id === entityId,
+    )?.content;
 
-  const setStatistics = (nextStatistics: StatisticCategory[]) => {
-    updateActiveEntityContent({ statistics: nextStatistics });
-  };
+    setPortalData((current) => current ? ({
+        ...current,
+        entities: current.entities.map((entity) =>
+          entity.id === entityId
+            ? { ...entity, content: { ...entity.content, ...updates } }
+            : entity,
+        ),
+      }) : current);
 
-  const setNews = (nextNews: News[]) => {
-    updateActiveEntityContent({ news: nextNews });
-  };
-
-  const setGallery = (nextGallery: GalleryItem[]) => {
-    updateActiveEntityContent({ gallery: nextGallery });
-  };
-
-  const setAdminUsers = (nextUsers: AdminProfile[] | ((prev: AdminProfile[]) => AdminProfile[])) => {
-    setAdminUsersState((prev) => {
-      const resolved = typeof nextUsers === 'function' ? nextUsers(prev) : nextUsers;
-      localStorage.setItem(ADMIN_USERS_STORAGE_KEY, JSON.stringify(resolved));
-      return resolved;
-    });
-  };
-
-  const setAdminProfile = (admin: AdminProfile) => {
-    if (!currentAdmin) return;
-    setAdminUsers((prev) =>
-      prev.map((item) =>
-        item.id === currentAdmin.id
-          ? {
-              ...item,
-              ...admin,
-              id: item.id,
-              role: item.role,
-              assignedEntityId: item.assignedEntityId,
-              assignedEntityLabel: item.assignedEntityLabel,
-            }
-          : item,
-      ),
-    );
-  };
-
-  const [isLoginModalOpen, setIsLoginModalOpen] = useState<boolean>(false);
-  const [selectedNews, setSelectedNews] = useState<News | null>(null);
-  const [loginForm, setLoginForm] = useState({ username: '', password: '' });
-  const [loginError, setLoginError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (activeEntityId !== selectedEntityId) {
-      setActiveEntityId(selectedEntityId);
-    }
-    setSelectedNews(null);
-  }, [selectedEntityId]);
-
-  useEffect(() => {
-    if (isAdminMode && currentAdmin?.role === 'admin' && currentAdmin.assignedEntityId && selectedEntityId !== currentAdmin.assignedEntityId) {
-      setActiveEntityId(currentAdmin.assignedEntityId);
-    }
-  }, [currentAdmin, isAdminMode, selectedEntityId]);
-
-  const handleLoginSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoginError(null);
-
-    const account = adminUsers.find((admin) => {
-      const matchUsername = loginForm.username === admin.username || loginForm.username === admin.email;
-      const matchPassword = loginForm.password === admin.password;
-      return matchUsername && matchPassword;
-    });
-
-    if (account) {
-      setCurrentAdminId(account.id || account.username);
-      setIsAdminMode(true);
-      localStorage.setItem(CURRENT_ADMIN_STORAGE_KEY, account.id || account.username);
-      if (account.role === 'admin' && account.assignedEntityId) {
-        setActiveEntityId(account.assignedEntityId);
+    void apiRequest(`/api/entities/${entityId}/content`, {
+      method: 'PATCH',
+      body: JSON.stringify({ updates }),
+    }).catch((error) => {
+      if (previousContent) {
+        setPortalData((current) => current ? ({
+            ...current,
+            entities: current.entities.map((entity) =>
+              entity.id === entityId
+                ? { ...entity, content: previousContent }
+                : entity,
+            ),
+          }) : current);
       }
-      setIsLoginModalOpen(false);
-      setLoginForm({ username: '', password: '' });
-    } else {
-      setLoginError('Kombinasi username/email dan kata sandi admin salah!');
+      alert(error instanceof Error ? error.message : 'Data gagal disimpan ke backend.');
+    });
+  };
+
+  const setVillageProfile = (profile: VillageProfile) =>
+    updateAssignedEntityContent({ profile });
+  const setStatistics = (nextStatistics: StatisticCategory[]) =>
+    updateAssignedEntityContent({ statistics: nextStatistics });
+  const setNews = (nextNews: News[]) =>
+    updateAssignedEntityContent({ news: nextNews });
+  const setGallery = (nextGallery: GalleryItem[]) =>
+    updateAssignedEntityContent({ gallery: nextGallery });
+
+  const setAdminProfile = (
+    profile: AdminProfile,
+    currentPassword?: string,
+  ) => {
+    const fields = {
+      name: profile.name,
+      username: profile.username,
+      email: profile.email,
+      avatarUrl: profile.avatarUrl,
+    };
+    void apiRequest<{ data: AdminProfile }>('/api/admin/profile', {
+      method: 'PATCH',
+      body: JSON.stringify({
+        fields,
+        currentPassword,
+        newPassword: profile.password || undefined,
+      }),
+    })
+      .then((response) => setCurrentAdmin(response.data))
+      .catch((error) => {
+        alert(error instanceof Error ? error.message : 'Profil admin gagal disimpan.');
+      });
+  };
+
+  const loadDistrictSummary = async () => {
+    const response = await apiRequest<{ data: DistrictEntitySummary[] }>(
+      '/api/district/summary',
+    );
+    setDistrictEntities(response.data);
+  };
+
+  const handleLogin = async (username: string, password: string) => {
+    try {
+      const response = await apiRequest<{ token: string; admin: AdminProfile }>(
+        '/api/auth/login',
+        {
+          method: 'POST',
+          body: JSON.stringify({ usernameOrEmail: username, password }),
+        },
+      );
+      setApiToken(response.token);
+      setCurrentAdmin(response.admin);
+      if (response.admin.role === 'super_admin') await loadDistrictSummary();
+      if (response.admin.assignedEntityId) {
+        setActiveEntityId(response.admin.assignedEntityId);
+      }
+      setAppView('admin');
+      return true;
+    } catch (error) {
+      clearApiToken();
+      if (error instanceof ApiError && error.status === 401) return false;
+      throw error;
     }
+  };
+
+  const openAdminPanel = async () => {
+    if (!currentAdmin) {
+      setAppView('login');
+      return;
+    }
+    if (currentAdmin.role === 'super_admin') {
+      try {
+        await loadDistrictSummary();
+      } catch {
+        clearApiToken();
+        setCurrentAdmin(null);
+        setAppView('login');
+        return;
+      }
+    }
+    setAppView('admin');
   };
 
   const handleLogout = () => {
-    setCurrentAdminId(null);
-    setIsAdminMode(false);
-    localStorage.removeItem(CURRENT_ADMIN_STORAGE_KEY);
+    void apiRequest('/api/auth/logout', { method: 'POST' }).catch(() => undefined);
+    clearApiToken();
+    setCurrentAdmin(null);
+    setDistrictEntities([]);
+    setAppView('login');
   };
+
+  if (appView === 'login') {
+    return (
+      <AdminLoginPage
+        onLogin={handleLogin}
+        onBack={() => setAppView('public')}
+      />
+    );
+  }
+
+  if (appView === 'admin' && currentAdmin) {
+    const dashboardEntity =
+      portalData.entities.find(
+        (entity) => entity.id === currentAdmin.assignedEntityId,
+      ) || activeEntity;
+
+    return (
+      <div className="min-h-screen bg-slate-100">
+        <header className="h-20 bg-slate-950 text-white border-b border-slate-800 px-5 sm:px-8 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <span className="p-2.5 rounded-xl bg-teal-600">
+              <Landmark className="h-5 w-5" />
+            </span>
+            <div>
+              <p className="font-black text-sm sm:text-base">Panel Admin {dashboardEntity.shortLabel}</p>
+              <p className="text-[10px] text-teal-300 uppercase tracking-widest">Area administrasi internal</p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setAppView('public')}
+            className="text-xs text-slate-400 hover:text-white border border-slate-700 rounded-xl px-3 py-2"
+          >
+            Lihat Website
+          </button>
+        </header>
+        <main className="max-w-7xl mx-auto p-4 sm:p-7 lg:p-10">
+          <AdminDashboard
+            villageProfile={dashboardEntity.content.profile}
+            setVillageProfile={setVillageProfile}
+            statistics={dashboardEntity.content.statistics}
+            setStatistics={setStatistics}
+            news={dashboardEntity.content.news}
+            setNews={setNews}
+            gallery={dashboardEntity.content.gallery}
+            setGallery={setGallery}
+            adminProfile={currentAdmin}
+            setAdminProfile={setAdminProfile}
+            districtEntities={districtEntities}
+            onLogout={handleLogout}
+          />
+        </main>
+      </div>
+    );
+  }
 
   return (
     <div id="application-root" className="min-h-screen bg-slate-50 flex flex-col justify-between">
       <Navbar
         currentTab={currentTab}
         setCurrentTab={setCurrentTab}
-        isAdminMode={isAdminMode}
-        setIsAdminMode={setIsAdminMode}
+        isAdminMode={false}
+        setIsAdminMode={() => undefined}
         villageProfile={villageProfile}
-        adminProfile={adminProfile}
+        adminProfile={currentAdmin || ANONYMOUS_ADMIN_PROFILE}
         onLogout={handleLogout}
-        openLoginModal={() => setIsLoginModalOpen(true)}
-        entities={visibleEntities.length ? visibleEntities : portalData.entities}
+        openLoginModal={() => void openAdminPanel()}
+        entities={portalData.entities}
         activeEntityId={selectedEntityId}
         onActiveEntityChange={setActiveEntityId}
       />
@@ -224,66 +333,43 @@ export default function App() {
               <p className="text-[10px] font-extrabold text-teal-700 uppercase tracking-wider">Konteks Website Aktif</p>
               <h2 className="text-base md:text-lg font-black text-slate-950 leading-tight">{activeEntity.label}</h2>
               <p className="text-xs text-slate-500 mt-1">
-                Berita, galeri, data, profil, dan kontak yang tampil mengikuti pilihan wilayah ini.
+                Berita, galeri, data, profil, dan kontak mengikuti pilihan wilayah ini.
               </p>
             </div>
           </div>
           <select
             value={selectedEntityId}
-            onChange={(e) => setActiveEntityId(e.target.value)}
+            onChange={(event) => setActiveEntityId(event.target.value)}
             className="w-full md:w-72 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-teal-600"
-            aria-label="Pilih konteks website"
           >
-            {(visibleEntities.length ? visibleEntities : portalData.entities).map((entity) => (
-              <option key={entity.id} value={entity.id}>
-                {entity.label}
-              </option>
+            {portalData.entities.map((entity) => (
+              <option key={entity.id} value={entity.id}>{entity.label}</option>
             ))}
           </select>
         </div>
 
         <div className="animate-fadeIn">
-          {isAdminMode && currentAdmin ? (
-            <div key={dashboardEntity.id}>
-              <AdminDashboard
-                villageProfile={dashboardEntity.content.profile}
-                setVillageProfile={setVillageProfile}
-                statistics={dashboardEntity.content.statistics}
-                setStatistics={setStatistics}
-                news={dashboardEntity.content.news}
-                setNews={setNews}
-                gallery={dashboardEntity.content.gallery}
-                setGallery={setGallery}
-                adminProfile={adminProfile}
-                setAdminProfile={setAdminProfile}
-                onLogout={handleLogout}
-              />
-            </div>
-          ) : (
-            <>
-              {currentTab === 'beranda' && (
-                <BerandaView
-                  villageProfile={villageProfile}
-                  statistics={statistics}
-                  news={news}
-                  gallery={gallery}
-                  setCurrentTab={setCurrentTab}
-                  setSelectedNews={setSelectedNews}
-                />
-              )}
-              {currentTab === 'profil' && <ProfilDesaView villageProfile={villageProfile} />}
-              {currentTab === 'data' && <DataDesaView statistics={statistics} villageProfile={villageProfile} />}
-              {currentTab === 'berita' && (
-                <PortalBeritaView
-                  news={news}
-                  selectedNews={selectedNews}
-                  setSelectedNews={setSelectedNews}
-                />
-              )}
-              {currentTab === 'galeri' && <GaleriView gallery={gallery} villageProfile={villageProfile} />}
-              {currentTab === 'kontak' && <KontakView villageProfile={villageProfile} />}
-            </>
+          {currentTab === 'beranda' && (
+            <BerandaView
+              villageProfile={villageProfile}
+              statistics={statistics}
+              news={news}
+              gallery={gallery}
+              setCurrentTab={setCurrentTab}
+              setSelectedNews={setSelectedNews}
+            />
           )}
+          {currentTab === 'profil' && <ProfilDesaView villageProfile={villageProfile} />}
+          {currentTab === 'data' && <DataDesaView statistics={statistics} villageProfile={villageProfile} />}
+          {currentTab === 'berita' && (
+            <PortalBeritaView
+              news={news}
+              selectedNews={selectedNews}
+              setSelectedNews={setSelectedNews}
+            />
+          )}
+          {currentTab === 'galeri' && <GaleriView gallery={gallery} villageProfile={villageProfile} />}
+          {currentTab === 'kontak' && <KontakView villageProfile={villageProfile} />}
         </div>
       </div>
 
@@ -292,16 +378,13 @@ export default function App() {
           <div className="grid grid-cols-1 md:grid-cols-4 gap-8">
             <div className="space-y-4">
               <div className="flex items-center space-x-3 text-white">
-                <div className="p-2 bg-teal-800 rounded-lg">
-                  <Landmark className="h-5 w-5 text-teal-300" />
-                </div>
+                <div className="p-2 bg-teal-800 rounded-lg"><Landmark className="h-5 w-5 text-teal-300" /></div>
                 <span className="font-bold text-lg">{villageProfile.name}</span>
               </div>
               <p className="text-xs text-teal-300 leading-relaxed font-light text-justify">
-                Portal komunikasi digital, publikasi kegiatan, dan transparansi data untuk tingkat kecamatan maupun desa.
+                Portal komunikasi digital, publikasi kegiatan, dan transparansi data tingkat kecamatan maupun desa.
               </p>
             </div>
-
             <div>
               <h4 className="font-extrabold text-sm text-teal-300 tracking-wider uppercase mb-4">Navigasi Portal</h4>
               <ul className="space-y-2 text-xs">
@@ -313,167 +396,37 @@ export default function App() {
                   ['galeri', `Galeri ${unitLabel}`],
                 ].map(([tab, label]) => (
                   <li key={tab}>
-                    <button onClick={() => { setCurrentTab(tab); setIsAdminMode(false); }} className="hover:text-white transition-colors cursor-pointer">
-                      {label}
-                    </button>
+                    <button onClick={() => setCurrentTab(tab)} className="hover:text-white transition-colors">{label}</button>
                   </li>
                 ))}
               </ul>
             </div>
-
             <div className="space-y-3">
-              <h4 className="font-extrabold text-sm text-teal-300 tracking-wider uppercase mb-1">Hubungi Pelayanan</h4>
+              <h4 className="font-extrabold text-sm text-teal-300 tracking-wider uppercase">Hubungi Pelayanan</h4>
               <ul className="space-y-3 text-xs text-teal-200">
-                <li className="flex items-start space-x-2">
-                  <MapPin className="h-4 w-4 shrink-0 text-teal-400" />
-                  <span className="leading-tight">{villageProfile.address}</span>
-                </li>
-                <li className="flex items-center space-x-2">
-                  <Phone className="h-4 w-4 text-teal-400" />
-                  <span>{villageProfile.phone}</span>
-                </li>
-                <li className="flex items-center space-x-2">
-                  <Mail className="h-4 w-4 text-teal-400" />
-                  <span>{villageProfile.email}</span>
-                </li>
+                <li className="flex items-start gap-2"><MapPin className="h-4 w-4 shrink-0 text-teal-400" />{villageProfile.address}</li>
+                <li className="flex items-center gap-2"><Phone className="h-4 w-4 text-teal-400" />{villageProfile.phone}</li>
+                <li className="flex items-center gap-2"><Mail className="h-4 w-4 text-teal-400" />{villageProfile.email}</li>
               </ul>
             </div>
-
             <div className="space-y-4">
               <h4 className="font-extrabold text-sm text-teal-300 tracking-wider uppercase">Portal Admin Terpadu</h4>
-              <p className="text-xs text-teal-400 leading-relaxed font-light">
-                Operator dapat memilih wilayah aktif, lalu mengelola profil, berita, data statistik, dan album galeri sesuai kebutuhan.
-              </p>
-              {currentAdmin ? (
-                <button
-                  id="footer-dashboard-link"
-                  onClick={() => setIsAdminMode(true)}
-                  className="px-4 py-2 bg-gradient-to-r from-amber-600 to-amber-700 text-white rounded-lg text-xs font-bold shadow transition-all active:scale-95 cursor-pointer"
-                >
-                  Masuk Dashboard
-                </button>
-              ) : (
-                <button
-                  id="footer-login-trigger"
-                  onClick={() => setIsLoginModalOpen(true)}
-                  className="px-4 py-2 bg-teal-900 hover:bg-teal-850 hover:text-white text-teal-200 rounded-lg text-xs font-medium border border-teal-850 shadow-sm transition-all active:scale-95 cursor-pointer"
-                >
-                  Masuk Operator Admin
-                </button>
-              )}
+              <p className="text-xs text-teal-400 leading-relaxed">Area login dan panel admin dipisahkan dari website publik.</p>
+              <button
+                onClick={() => void openAdminPanel()}
+                className="px-4 py-2 bg-teal-900 hover:bg-teal-850 text-teal-200 rounded-lg text-xs border border-teal-850"
+              >
+                {currentAdmin ? 'Buka Panel Admin' : 'Masuk Operator Admin'}
+              </button>
             </div>
           </div>
-
           <div className="h-px bg-teal-900 my-8" />
-
-          <div className="flex flex-wrap items-center justify-between gap-4 text-xs text-teal-400 font-medium">
-            <p>© {new Date().getFullYear()} Pemerintah {villageProfile.name}, {villageProfile.regency}. All Rights Reserved.</p>
-            <p className="flex items-center gap-1">
-              <span>Sistem portal wilayah terintegrasi dengan</span>
-              <Heart className="h-3.5 w-3.5 text-red-500 fill-red-500 animate-pulse" />
-              <span>untuk pelayanan publik</span>
-            </p>
+          <div className="flex flex-wrap items-center justify-between gap-4 text-xs text-teal-400">
+            <p>© {new Date().getFullYear()} Pemerintah {villageProfile.name}, {villageProfile.regency}.</p>
+            <p className="flex items-center gap-1">Pelayanan publik <Heart className="h-3.5 w-3.5 text-red-500 fill-red-500" /></p>
           </div>
         </div>
       </footer>
-
-      {isLoginModalOpen && (
-        <div
-          id="login-modal-backdrop"
-          className="fixed inset-0 z-50 bg-teal-985/80 backdrop-blur-sm flex items-center justify-center p-4 animate-fadeIn"
-          onClick={() => setIsLoginModalOpen(false)}
-        >
-          <div
-            id="login-modal-container"
-            className="bg-white rounded-2xl border border-gray-150 shadow-2xl max-w-sm w-full p-6 space-y-6 relative animate-slideUp text-gray-900"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between border-b border-gray-100 pb-3">
-              <div className="flex items-center space-x-2 text-teal-800">
-                <div className="p-1.5 bg-teal-50 rounded-lg border border-teal-100">
-                  <Lock className="h-4.5 w-4.5" />
-                </div>
-                <h3 className="font-extrabold text-sm tracking-tight uppercase">Autentikasi Operator</h3>
-              </div>
-              <button
-                id="login-modal-close-btn"
-                onClick={() => setIsLoginModalOpen(false)}
-                className="p-1 hover:bg-gray-100 hover:text-gray-900 text-gray-400 rounded-full transition-colors cursor-pointer"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-
-            <div className="space-y-2">
-              <h4 className="font-extrabold text-md tracking-tight leading-snug">Portal Masuk Operator Wilayah</h4>
-              <p className="text-gray-500 text-xs text-justify">
-                Super admin kecamatan dapat mengelola semua wilayah. Admin desa/kelurahan hanya dapat mengubah konten wilayah yang ditugaskan.
-              </p>
-            </div>
-
-            {loginError && (
-              <div id="login-error-message" className="p-3 bg-red-50 border border-red-200 rounded-xl text-red-700 text-xs flex items-start gap-1.5">
-                <AlertCircle className="h-4.5 w-4.5 text-red-600 shrink-0 mt-0.5" />
-                <span className="font-medium">{loginError}</span>
-              </div>
-            )}
-
-            <form id="simulated-login-form" onSubmit={handleLoginSubmit} className="space-y-4">
-              <div className="space-y-1.5">
-                <label className="text-[10px] font-extrabold text-gray-450 uppercase">Username / Email</label>
-                <input
-                  type="text"
-                  value={loginForm.username}
-                  onChange={(e) => setLoginForm({ ...loginForm, username: e.target.value })}
-                  placeholder="admin"
-                  required
-                  className="w-full px-3 py-2.5 rounded-lg border border-gray-200 text-xs focus:outline-none focus:ring-2 focus:ring-teal-600 focus:border-transparent transition-all"
-                  autoComplete="username"
-                />
-              </div>
-
-              <div className="space-y-1.5">
-                <label className="text-[10px] font-extrabold text-gray-450 uppercase">Kata Sandi</label>
-                <input
-                  type="password"
-                  value={loginForm.password}
-                  onChange={(e) => setLoginForm({ ...loginForm, password: e.target.value })}
-                  placeholder="admin"
-                  required
-                  className="w-full px-3 py-2.5 rounded-lg border border-gray-200 text-xs focus:outline-none focus:ring-2 focus:ring-teal-600 focus:border-transparent transition-all"
-                  autoComplete="current-password"
-                />
-              </div>
-
-              <button
-                type="submit"
-                id="login-submit-btn"
-                className="w-full py-3 bg-teal-700 hover:bg-teal-600 text-white text-xs font-bold uppercase rounded-lg transition-all shadow cursor-pointer flex items-center justify-center space-x-1"
-              >
-                <Key className="h-3.5 w-3.5" />
-                <span>Masuk Dashboard</span>
-              </button>
-            </form>
-
-            <div className="bg-gray-50 border border-gray-150 p-3 rounded-xl space-y-2 text-[10px] text-gray-500">
-              <p className="font-extrabold text-gray-700">Kredensial Evaluasi:</p>
-              <p>
-                Super admin kecamatan:
-                <strong className="font-mono text-teal-800"> admin</strong> /
-                <strong className="font-mono text-teal-800"> admin</strong>
-              </p>
-              <p>
-                Admin wilayah:
-                <strong className="font-mono text-teal-800"> tawalian-timur</strong>,
-                <strong className="font-mono text-teal-800"> kariango</strong>,
-                <strong className="font-mono text-teal-800"> kelurahan-tawalian</strong>,
-                <strong className="font-mono text-teal-800"> rantetangnga</strong> /
-                <strong className="font-mono text-teal-800"> admin</strong>
-              </p>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

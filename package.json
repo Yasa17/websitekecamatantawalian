@@ -4,20 +4,31 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite --port=3000 --host=0.0.0.0",
+    "dev": "node server/dev.mjs",
+    "dev:frontend": "vite --port=3000 --host=0.0.0.0",
+    "server": "node server/index.mjs",
+    "start": "node server/index.mjs",
+    "db:migrate": "node server/migrate.mjs",
+    "db:seed": "node --import tsx server/seed.mjs",
+    "db:import-json": "node server/import-json.mjs",
     "build": "vite build",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "test:server": "node --test server/index.test.mjs server/database.test.mjs",
+    "test:statistics": "node --import tsx --test src/utils/statisticTable.test.ts src/utils/statisticPresentation.test.ts",
+    "test:cloudflare": "wrangler pages functions build functions --outdir .wrangler/pages-functions --output-routes-path .wrangler/_routes.json --compatibility-date 2026-07-12 --compatibility-flag nodejs_compat"
   },
   "dependencies": {
+    "@e965/xlsx": "^0.20.3",
     "@google/genai": "^2.4.0",
     "@tailwindcss/vite": "^4.1.14",
     "@vitejs/plugin-react": "^5.0.4",
     "dotenv": "^17.2.3",
-    "express": "^4.21.2",
+    "express": "^5.2.1",
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",
+    "pg": "^8.22.0",
     "react": "^19.0.1",
     "react-dom": "^19.0.1",
     "recharts": "^3.8.1",
@@ -28,9 +39,11 @@
     "@types/node": "^22.14.0",
     "autoprefixer": "^10.4.21",
     "esbuild": "^0.25.0",
+    "pg-mem": "^3.0.14",
     "tailwindcss": "^4.1.14",
     "tsx": "^4.21.0",
     "typescript": "~5.8.2",
-    "vite": "^6.2.3"
+    "vite": "^6.2.3",
+    "wrangler": "^4.119.0"
   }
 }
