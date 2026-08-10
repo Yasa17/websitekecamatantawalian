@@ -1,6 +1,7 @@
 import { Client } from 'pg';
 import { dispatchApiRequest } from '../../server/api-handler.mjs';
 import { withDatabaseClient } from '../../server/database.mjs';
+import { createSupabaseMediaStorage } from '../../server/media-storage.mjs';
 
 const maxJsonBodyBytes = 10 * 1024 * 1024;
 
@@ -74,6 +75,7 @@ export const onRequest = async (context) => {
   }
 
   const client = new Client({ connectionString });
+  const mediaStorage = createSupabaseMediaStorage(context.env);
   try {
     await client.connect();
     const result = await withDatabaseClient(client, () => dispatchApiRequest({
@@ -82,6 +84,7 @@ export const onRequest = async (context) => {
       authorization: context.request.headers.get('authorization') || '',
       body,
       allowBootstrap: false,
+      mediaStorage,
     }));
     return jsonResponse(result.body, result.status, context.request.method);
   } catch (error) {

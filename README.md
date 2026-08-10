@@ -25,6 +25,8 @@ Migrasi membuat tabel berikut:
   kolom PostgreSQL `JSONB`
 - `admins`: identitas, hak akses, dan hash password admin
 - `admin_sessions`: sesi login persisten; token mentah tidak disimpan
+- `citizen_submissions`: aspirasi, aduan, dan pertanyaan warga; tabel ini tidak
+  ikut dikirim melalui API publik dan RLS diaktifkan tanpa policy publik
 - `schema_migrations`: riwayat migrasi skema
 
 ## Memasukkan data pertama kali
@@ -84,6 +86,8 @@ Project Pages menggunakan konfigurasi build berikut:
 - branch produksi: `main`
 - compatibility flag: `nodejs_compat`
 - binding Hyperdrive: `HYPERDRIVE`
+- compatibility secret/variable untuk media: `SUPABASE_URL`,
+  `SUPABASE_SECRET_KEY`, dan `SUPABASE_STORAGE_BUCKET`
 
 Folder `functions/api` menjalankan adaptor Fetch native sebagai Pages Function;
 Express hanya digunakan oleh server lokal Node.js.
@@ -103,6 +107,38 @@ dan password disimpan oleh konfigurasi Hyperdrive di Cloudflare dan tidak boleh
 dimasukkan ke source code, GitHub, atau Variables and secrets Pages. Migrasi
 database tetap dijalankan dari komputer/server tepercaya dengan `npm run
 db:migrate`, bukan pada setiap permintaan Pages Function.
+
+### Supabase Storage untuk foto
+
+Semua foto baru tetap dikompresi menjadi WebP maksimal 500 KB di browser, tetapi
+Base64 hanya dipakai sementara saat pengiriman. Pages Function mengunggahnya ke
+Supabase Storage dan PostgreSQL hanya menyimpan URL objek.
+
+1. Di dashboard Supabase buat bucket publik bernama `portal-media`.
+2. Batasi ukuran file bucket ke 500 KB dan MIME ke `image/webp`.
+3. Isi nilai berikut hanya di `.env` lokal:
+
+```dotenv
+SUPABASE_URL="https://PROJECT_REF.supabase.co"
+SUPABASE_SECRET_KEY="sb_secret_..."
+SUPABASE_STORAGE_BUCKET="portal-media"
+```
+
+4. Tambahkan `SUPABASE_URL` dan `SUPABASE_STORAGE_BUCKET` sebagai Variables pada
+   Cloudflare Pages. Tambahkan `SUPABASE_SECRET_KEY` sebagai encrypted Secret.
+   Secret ini berhak tinggi: jangan pernah menaruhnya pada React, GitHub,
+   `wrangler.jsonc`, screenshot, atau percakapan.
+5. Periksa lalu migrasikan foto Base64 lama:
+
+```bash
+npm run storage:check
+npm run storage:migrate
+```
+
+Migrasi hanya mengubah kolom database setelah objek berhasil diunggah. URL gambar
+HTTP(S) lama tidak dipindahkan atau dihapus. Foto Storage yang diganti/dihapus
+melalui panel admin juga dibersihkan dari bucket setelah pembaruan database
+berhasil.
 
 Periksa bundle Pages Function sebelum push:
 
@@ -145,6 +181,8 @@ setelah login pertama.
   diunggah dalam format aslinya.
 - Hasil dikonversi menjadi WebP dengan ukuran lebih dari 0 KB dan maksimal 500 KB.
 - Backend memvalidasi kembali format, ukuran, dan jumlah foto.
+- Foto tersimpan sebagai objek pada bucket Supabase `portal-media`; PostgreSQL
+  hanya menyimpan URL sehingga ukuran database tidak membengkak karena Base64.
 - Foto profil wilayah, struktur organisasi, perangkat, thumbnail berita, dan
   avatar admin juga dipilih dari perangkat dan diproses dengan aturan yang sama;
   panel admin tidak menyediakan input URL gambar.

@@ -4,6 +4,10 @@
   "pages_build_output_dir": "./dist",
   "compatibility_date": "2026-07-12",
   "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "SUPABASE_URL": "https://zdyrcecfvkhmavwvfgom.supabase.co",
+    "SUPABASE_STORAGE_BUCKET": "portal-media"
+  },
   "hyperdrive": [
     {
       "binding": "HYPERDRIVE",

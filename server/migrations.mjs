@@ -27,7 +27,13 @@ export const runMigrations = async () => {
       );
       if (applied.rowCount) continue;
 
-      const sql = await readFile(path.join(migrationsDirectory, fileName), 'utf8');
+      const migrationSql = await readFile(path.join(migrationsDirectory, fileName), 'utf8');
+      const sql = process.env.DATABASE_URL === 'pg-mem://test'
+        ? migrationSql.replace(
+            /-- pg-mem-ignore-start[\s\S]*?-- pg-mem-ignore-end/g,
+            '',
+          )
+        : migrationSql;
       await client.query('BEGIN');
       try {
         await client.query(sql);

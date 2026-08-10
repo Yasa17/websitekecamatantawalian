@@ -30,6 +30,7 @@ export const INITIAL_VILLAGE_PROFILE: VillageProfile = {
   address: 'Desa Tawalian Timur, Kecamatan Tawalian, Kabupaten Mamasa, Sulawesi Barat',
   phone: '0812-3456-7890',
   email: 'pemdes@tawaliantimur.desa.id',
+  serviceHours: 'Senin–Jumat, 08.00–15.00 WITA',
   mapEmbedUrl: 'https://www.google.com/maps?q=Desa%20Tawalian%20Timur%2C%20Kecamatan%20Tawalian%2C%20Kabupaten%20Mamasa%2C%20Sulawesi%20Barat&output=embed',
   geographicData: {
     area: '425.8 Ha',

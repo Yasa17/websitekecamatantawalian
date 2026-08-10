@@ -99,6 +99,7 @@ export interface VillageProfile {
   address: string;
   phone: string;
   email: string;
+  serviceHours?: string;
   mapEmbedUrl: string;
   geographicData: {
     area: string; // e.g., "124.5 Ha"
@@ -127,4 +128,22 @@ export interface PortalEntity {
 
 export interface PortalData {
   entities: PortalEntity[];
+}
+
+export type CitizenSubmissionKind = 'aspirasi' | 'aduan' | 'pertanyaan';
+export type CitizenSubmissionStatus = 'new' | 'in_progress' | 'resolved' | 'rejected';
+
+export interface CitizenSubmission {
+  id: string;
+  entityId: string;
+  entityLabel?: string;
+  kind: CitizenSubmissionKind;
+  name: string;
+  email: string;
+  phone: string;
+  category: string;
+  message: string;
+  status: CitizenSubmissionStatus;
+  createdAt: string;
+  updatedAt: string;
 }

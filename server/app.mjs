@@ -1,7 +1,9 @@
 import express from 'express';
 import { apiErrorResult, dispatchApiRequest } from './api-handler.mjs';
+import { createMediaStorageFromEnv } from './media-storage.mjs';
 
 const app = express();
+const mediaStorage = createMediaStorageFromEnv(process.env);
 
 app.use(express.json({ limit: '10mb' }));
 
@@ -13,6 +15,7 @@ app.use('/api', async (request, response, next) => {
       authorization: request.headers.authorization || '',
       body: request.body || {},
       allowBootstrap: process.env.NODE_ENV === 'test',
+      mediaStorage,
     });
     response.status(result.status).json(result.body);
   } catch (error) {

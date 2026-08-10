@@ -11,6 +11,7 @@ const server = spawn(process.execPath, ['server/index.mjs'], {
     PORT: String(port),
     NODE_ENV: 'test',
     DATABASE_URL: 'pg-mem://test',
+    MEDIA_STORAGE_TEST_MODE: 'true',
   },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
@@ -27,8 +28,15 @@ const request = async (pathname, options = {}) => {
   return { response, body };
 };
 
+const fakeWebPDataUrl = (size) => {
+  const bytes = Buffer.alloc(size);
+  bytes.write('RIFF', 0, 'ascii');
+  bytes.write('WEBP', 8, 'ascii');
+  return `data:image/webp;base64,${bytes.toString('base64')}`;
+};
+
 const waitUntilReady = async () => {
-  for (let attempt = 0; attempt < 50; attempt += 1) {
+  for (let attempt = 0; attempt < 120; attempt += 1) {
     try {
       const { response } = await request('/api/health');
       if (response.ok) return;
@@ -176,6 +184,128 @@ test('backend menyimpan data dan membatasi hak akses berdasarkan peran', async (
   const villageHeaders = {
     Authorization: `Bearer ${villageLogin.body.token}`,
   };
+
+  const contactUpdate = await request('/api/entities/desa-satu/content', {
+    method: 'PATCH',
+    headers: villageHeaders,
+    body: JSON.stringify({
+      updates: {
+        profile: {
+          address: 'Kantor Desa Satu',
+          phone: '0812-0000-0000',
+          email: 'layanan@desa-satu.example',
+          serviceHours: 'Senin–Jumat, 08.00–15.00 WITA',
+          mapEmbedUrl: 'https://www.google.com/maps?q=Desa+Satu&output=embed',
+        },
+      },
+    }),
+  });
+  assert.equal(contactUpdate.response.status, 200);
+  assert.equal(contactUpdate.body.data.profile.address, 'Kantor Desa Satu');
+
+  const invalidMapUpdate = await request('/api/entities/desa-satu/content', {
+    method: 'PATCH',
+    headers: villageHeaders,
+    body: JSON.stringify({
+      updates: { profile: { mapEmbedUrl: 'javascript:alert(1)' } },
+    }),
+  });
+  assert.equal(invalidMapUpdate.response.status, 400);
+
+  const invalidSubmission = await request('/api/citizen-submissions', {
+    method: 'POST',
+    body: JSON.stringify({
+      entityId: 'desa-satu',
+      kind: 'aduan',
+      name: 'A',
+      email: 'bukan-email',
+      category: 'Lainnya',
+      message: 'pendek',
+    }),
+  });
+  assert.equal(invalidSubmission.response.status, 400);
+
+  const citizenSubmission = await request('/api/citizen-submissions', {
+    method: 'POST',
+    body: JSON.stringify({
+      entityId: 'desa-satu',
+      kind: 'aduan',
+      name: 'Warga Desa',
+      email: 'warga@example.test',
+      phone: '0812-3456-7890',
+      category: 'Pengaduan Kerusakan Infrastruktur',
+      message: 'Jalan di dekat kantor desa mengalami kerusakan cukup berat.',
+      website: '',
+    }),
+  });
+  assert.equal(citizenSubmission.response.status, 201);
+  assert.ok(citizenSubmission.body.referenceId);
+
+  const publicPortalAfterSubmission = await request('/api/portal');
+  assert.equal(publicPortalAfterSubmission.response.status, 200);
+  assert.equal(
+    JSON.stringify(publicPortalAfterSubmission.body).includes('warga@example.test'),
+    false,
+  );
+
+  const anonymousInbox = await request('/api/admin/citizen-submissions');
+  assert.equal(anonymousInbox.response.status, 401);
+
+  const villageInbox = await request('/api/admin/citizen-submissions', {
+    headers: villageHeaders,
+  });
+  assert.equal(villageInbox.response.status, 200);
+  assert.equal(villageInbox.body.data.length, 1);
+  assert.equal(villageInbox.body.data[0].email, 'warga@example.test');
+
+  const districtInbox = await request('/api/admin/citizen-submissions', {
+    headers: districtHeaders,
+  });
+  assert.equal(districtInbox.response.status, 200);
+  assert.equal(districtInbox.body.data.length, 0);
+
+  const updateSubmissionStatus = await request(
+    `/api/admin/citizen-submissions/${citizenSubmission.body.referenceId}/status`,
+    {
+      method: 'PATCH',
+      headers: villageHeaders,
+      body: JSON.stringify({ status: 'in_progress' }),
+    },
+  );
+  assert.equal(updateSubmissionStatus.response.status, 200);
+  assert.equal(updateSubmissionStatus.body.data.status, 'in_progress');
+
+  const otherAdminCannotUpdateSubmission = await request(
+    `/api/admin/citizen-submissions/${citizenSubmission.body.referenceId}/status`,
+    {
+      method: 'PATCH',
+      headers: districtHeaders,
+      body: JSON.stringify({ status: 'resolved' }),
+    },
+  );
+  assert.equal(otherAdminCannotUpdateSubmission.response.status, 404);
+
+  const repeatedSubmissionBody = {
+    entityId: 'desa-satu',
+    kind: 'aspirasi',
+    name: 'Warga Desa',
+    email: 'warga@example.test',
+    category: 'Lainnya',
+    message: 'Kiriman lanjutan untuk menguji batas pengiriman formulir warga.',
+  };
+  for (let index = 0; index < 2; index += 1) {
+    const allowedRepeat = await request('/api/citizen-submissions', {
+      method: 'POST',
+      body: JSON.stringify(repeatedSubmissionBody),
+    });
+    assert.equal(allowedRepeat.response.status, 201);
+  }
+  const rateLimitedSubmission = await request('/api/citizen-submissions', {
+    method: 'POST',
+    body: JSON.stringify(repeatedSubmissionBody),
+  });
+  assert.equal(rateLimitedSubmission.response.status, 429);
+
   const updatedStatistics = [
     {
       ...statistics[0],
@@ -318,7 +448,7 @@ test('backend menyimpan data dan membatasi hak akses berdasarkan peran', async (
   });
   assert.equal(rawPhoto.response.status, 400);
 
-  const webpData = `data:image/webp;base64,${Buffer.alloc(220 * 1024).toString('base64')}`;
+  const webpData = fakeWebPDataUrl(220 * 1024);
   const sixPhotos = Array.from({ length: 6 }, () => webpData);
   const albumWithTooManyPhotos = await request('/api/entities/desa-satu/content', {
     method: 'PATCH',
@@ -331,7 +461,7 @@ test('backend menyimpan data dan membatasi hak akses berdasarkan peran', async (
   });
   assert.equal(albumWithTooManyPhotos.response.status, 400);
 
-  const smallWebpData = `data:image/webp;base64,${Buffer.alloc(1024).toString('base64')}`;
+  const smallWebpData = fakeWebPDataUrl(1024);
   const smallConvertedPhoto = await request('/api/entities/desa-satu/content', {
     method: 'PATCH',
     headers: villageHeaders,
@@ -346,6 +476,14 @@ test('backend menyimpan data dan membatasi hak akses berdasarkan peran', async (
     }),
   });
   assert.equal(smallConvertedPhoto.response.status, 200);
+  assert.match(
+    smallConvertedPhoto.body.data.gallery[0].url,
+    /^https:\/\/storage\.example\.test\/storage\/v1\/object\/public\/portal-media\//,
+  );
+  assert.equal(
+    smallConvertedPhoto.body.data.gallery[0].url.startsWith('data:image/'),
+    false,
+  );
 
   const otherSmallImageUploads = await request('/api/entities/desa-satu/content', {
     method: 'PATCH',
@@ -374,7 +512,7 @@ test('backend menyimpan data dan membatasi hak akses berdasarkan peran', async (
   });
   assert.equal(smallAvatarUpload.response.status, 200);
 
-  const oversizedWebpData = `data:image/webp;base64,${Buffer.alloc(501 * 1024).toString('base64')}`;
+  const oversizedWebpData = fakeWebPDataUrl(501 * 1024);
   const oversizedPhoto = await request('/api/entities/desa-satu/content', {
     method: 'PATCH',
     headers: villageHeaders,

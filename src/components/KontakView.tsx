@@ -3,15 +3,17 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
-import { Mail, Phone, MapPin, Send, HelpCircle, CheckCircle, Info } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { Mail, Phone, MapPin, Send, CheckCircle, Info, AlertCircle } from 'lucide-react';
 import { VillageProfile } from '../types';
+import { apiRequest } from '../services/api';
 
 interface KontakViewProps {
   villageProfile: VillageProfile;
+  entityId: string;
 }
 
-export default function KontakView({ villageProfile }: KontakViewProps) {
+export default function KontakView({ villageProfile, entityId }: KontakViewProps) {
   const unitLabel = villageProfile.contentLabel || (villageProfile.administrationLevel === 'kecamatan' ? 'Kecamatan' : villageProfile.administrationLevel === 'kelurahan' ? 'Kelurahan' : 'Desa');
   const officeLabel = villageProfile.officeLabel || (unitLabel === 'Kecamatan' ? 'Kantor Kecamatan' : 'Kantor Desa');
   const headRole = villageProfile.headRole || (unitLabel === 'Kecamatan' ? 'Camat' : 'Kepala Desa');
@@ -20,40 +22,84 @@ export default function KontakView({ villageProfile }: KontakViewProps) {
     name: '',
     email: '',
     phone: '',
+    kind: 'aspirasi',
     subject: '',
     message: '',
+    website: '',
   });
 
   const [isSubmitSuccess, setIsSubmitSuccess] = useState(false);
+  const [referenceId, setReferenceId] = useState('');
+  const [submitError, setSubmitError] = useState('');
   const [loading, setLoading] = useState(false);
+  const activeEntityIdRef = useRef(entityId);
+
+  useEffect(() => {
+    activeEntityIdRef.current = entityId;
+    setIsSubmitSuccess(false);
+    setReferenceId('');
+    setSubmitError('');
+    setLoading(false);
+    setFormData({
+      name: '',
+      email: '',
+      phone: '',
+      kind: 'aspirasi',
+      subject: '',
+      message: '',
+      website: '',
+    });
+  }, [entityId]);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
     setFormData((prev) => ({ ...prev, [name]: value }));
   };
 
-  const handleFormSubmit = (e: React.FormEvent) => {
+  const handleFormSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
-
-    // Simulate sending progress with 1 sec delay
-    setTimeout(() => {
-      setLoading(false);
+    setSubmitError('');
+    setIsSubmitSuccess(false);
+    try {
+      const response = await apiRequest<{ success: boolean; referenceId: string }>(
+        '/api/citizen-submissions',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            entityId,
+            kind: formData.kind,
+            name: formData.name,
+            email: formData.email,
+            phone: formData.phone,
+            category: formData.subject,
+            message: formData.message,
+            website: formData.website,
+          }),
+        },
+      );
+      if (activeEntityIdRef.current !== entityId) return;
+      setReferenceId(response.referenceId);
       setIsSubmitSuccess(true);
-      // clear inputs
       setFormData({
         name: '',
         email: '',
         phone: '',
+        kind: 'aspirasi',
         subject: '',
         message: '',
+        website: '',
       });
-
-      // auto clear notification in 5 seconds
-      setTimeout(() => {
-        setIsSubmitSuccess(false);
-      }, 5000);
-    }, 1200);
+    } catch (error) {
+      if (activeEntityIdRef.current !== entityId) return;
+      setSubmitError(
+        error instanceof Error
+          ? error.message
+          : 'Aspirasi atau aduan belum berhasil dikirim.',
+      );
+    } finally {
+      if (activeEntityIdRef.current === entityId) setLoading(false);
+    }
   };
 
   return (
@@ -98,7 +144,9 @@ export default function KontakView({ villageProfile }: KontakViewProps) {
                 <div>
                   <h5 className="font-bold text-xs text-gray-400 font-mono tracking-wider uppercase mb-1">LAYANAN TELEPON & HOTLINE WA</h5>
                   <p className="text-gray-700 text-sm font-semibold">{villageProfile.phone}</p>
-                  <p className="text-[10px] text-gray-400 mt-1">Aktif Jam Kerja: Senin - Jumat (08.00 - 15.00 WIB)</p>
+                  <p className="text-[10px] text-gray-400 mt-1">
+                    Jam pelayanan: {villageProfile.serviceHours || 'Senin–Jumat, 08.00–15.00 WITA'}
+                  </p>
                 </div>
               </div>
 
@@ -122,7 +170,7 @@ export default function KontakView({ villageProfile }: KontakViewProps) {
             <div className="space-y-1 text-xs">
               <h5 className="font-bold">Mekanisme Pengaduan Hukum (Aman)</h5>
               <p className="text-amber-800 leading-relaxed leading-normal text-justify">
-                Seluruh saran aspirasi pembangunan dan pengaduan layanan aparat yang diunggah melalui formulir di samping dijamin kerahasiaannya dan diproses berkala oleh pengelola layanan {unitLabel}.
+                Data formulir hanya dapat dibaca oleh operator wilayah yang berwenang dan digunakan untuk menindaklanjuti pelayanan {unitLabel}.
               </p>
             </div>
           </div>
@@ -148,7 +196,17 @@ export default function KontakView({ villageProfile }: KontakViewProps) {
                 <p className="text-xs text-emerald-700 mt-1 text-justify">
                   Hatur nuhun! Pesan kritik/saran Anda telah berhasil terekam di sistem digital {unitLabel.toLowerCase()}. Jajaran pengurus administrasi akan melakukan validasi dan pemrosesan secepatnya.
                 </p>
+                <p className="mt-1 font-mono text-[10px] text-emerald-800">
+                  Nomor referensi: {referenceId}
+                </p>
               </div>
+            </div>
+          )}
+
+          {submitError && (
+            <div className="flex items-start gap-3 rounded-xl border border-red-200 bg-red-50 p-4 text-red-800">
+              <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-red-600" />
+              <p className="text-xs leading-relaxed">{submitError}</p>
             </div>
           )}
 
@@ -196,6 +254,22 @@ export default function KontakView({ villageProfile }: KontakViewProps) {
               </div>
 
               <div className="space-y-1.5">
+                <label className="text-xs font-bold text-gray-600 uppercase">Jenis Kiriman</label>
+                <select
+                  name="kind"
+                  value={formData.kind}
+                  onChange={handleInputChange}
+                  required
+                  className="w-full px-4 py-2.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-teal-600 focus:border-transparent bg-white transition-all text-gray-700"
+                >
+                  <option value="aspirasi">Aspirasi / Saran</option>
+                  <option value="aduan">Aduan / Laporan</option>
+                  <option value="pertanyaan">Pertanyaan Pelayanan</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
                 <label className="text-xs font-bold text-gray-600 uppercase">Kategori Aspirasi / Aduan</label>
                 <select
                   name="subject"
@@ -211,7 +285,20 @@ export default function KontakView({ villageProfile }: KontakViewProps) {
                   <option value="Pelayanan Administrasi Kependudukan">Persoalan Layanan Administrasi Kependudukan</option>
                   <option value="Lainnya">Lainnya / Umum</option>
                 </select>
-              </div>
+            </div>
+
+            <div className="hidden" aria-hidden="true">
+              <label>
+                Situs web
+                <input
+                  type="text"
+                  name="website"
+                  value={formData.website}
+                  onChange={handleInputChange}
+                  tabIndex={-1}
+                  autoComplete="off"
+                />
+              </label>
             </div>
 
             <div className="space-y-1.5">
@@ -236,7 +323,7 @@ export default function KontakView({ villageProfile }: KontakViewProps) {
               }`}
             >
               <Send className="h-4 w-4" />
-              <span>{loading ? 'Mengirimkan Beraspirasi...' : 'Kirimkan Aspirasi / Aduan'}</span>
+              <span>{loading ? 'Mengirim...' : 'Kirimkan Aspirasi / Aduan'}</span>
             </button>
           </form>
         </div>

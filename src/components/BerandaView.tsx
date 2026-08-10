@@ -29,7 +29,9 @@ export default function BerandaView({
   const headRole = villageProfile.headRole || (unitLabel === 'Kecamatan' ? 'Camat' : 'Kepala Desa');
   const officeLabel = villageProfile.officeLabel || (unitLabel === 'Kecamatan' ? 'Kantor Kecamatan' : 'Kantor Desa');
   const genderStat = statistics.find((s) => s.id.includes('kependudukan') || s.title.toLowerCase().includes('kependudukan'));
-  const totalWarga = genderStat ? genderStat.items.reduce((acc, curr) => acc + curr.value, 0) : 3770;
+  const totalWarga = genderStat
+    ? genderStat.items.reduce((acc, curr) => acc + curr.value, 0)
+    : null;
   const publishedNews = news.filter((n) => n.status === 'Published');
   const activePhotos = gallery.length;
 
@@ -125,7 +127,9 @@ export default function BerandaView({
             <Users className="h-6 w-6" />
             <span className="text-[10px] uppercase font-bold tracking-widest text-teal-700 bg-teal-100 px-2 py-0.5 rounded">TOTAL</span>
           </div>
-          <p className="text-2xl md:text-3xl font-black text-teal-950 mt-1">{totalWarga.toLocaleString('id-ID')}</p>
+          <p className="text-2xl md:text-3xl font-black text-teal-950 mt-1">
+            {totalWarga === null ? 'Belum tersedia' : totalWarga.toLocaleString('id-ID')}
+          </p>
           <h4 className="text-xs md:text-sm font-medium text-teal-800 mt-2">Jumlah Penduduk (Jiwa)</h4>
         </div>
 

@@ -182,7 +182,18 @@ export const updateEntityContent = async (entityId, updates) => {
       return null;
     }
 
-    const content = { ...current.rows[0].content, ...updates };
+    const content = {
+      ...current.rows[0].content,
+      ...updates,
+      ...(updates.profile !== undefined
+        ? {
+            profile: {
+              ...(current.rows[0].content.profile || {}),
+              ...updates.profile,
+            },
+          }
+        : {}),
+    };
     const result = await client.query(
       `UPDATE portal_entities
        SET content = $2::jsonb, updated_at = NOW()
@@ -191,13 +202,96 @@ export const updateEntityContent = async (entityId, updates) => {
       [entityId, JSON.stringify(content)],
     );
     await client.query('COMMIT');
-    return result.rows[0].content;
+    return {
+      previousContent: current.rows[0].content,
+      content: result.rows[0].content,
+    };
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;
   } finally {
     client.release();
   }
+};
+
+export const entityExists = async (entityId) => {
+  const result = await databasePool.query(
+    'SELECT 1 FROM portal_entities WHERE id = $1 LIMIT 1',
+    [entityId],
+  );
+  return Boolean(result.rowCount);
+};
+
+const mapCitizenSubmission = (row) => ({
+  id: row.id,
+  entityId: row.entity_id,
+  entityLabel: row.entity_label,
+  kind: row.kind,
+  name: row.name,
+  email: row.email,
+  phone: row.phone,
+  category: row.category,
+  message: row.message,
+  status: row.status,
+  createdAt: row.created_at,
+  updatedAt: row.updated_at,
+});
+
+export const createCitizenSubmission = async (submission) => {
+  const recent = await databasePool.query(
+    `SELECT COUNT(*)::INTEGER AS count
+     FROM citizen_submissions
+     WHERE entity_id = $1
+       AND LOWER(email) = LOWER($2)
+       AND created_at >= NOW() - INTERVAL '10 minutes'`,
+    [submission.entityId, submission.email],
+  );
+  if (recent.rows[0].count >= 3) return null;
+
+  const result = await databasePool.query(
+    `INSERT INTO citizen_submissions
+      (id, entity_id, kind, name, email, phone, category, message)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+     RETURNING id, created_at`,
+    [
+      submission.id,
+      submission.entityId,
+      submission.kind,
+      submission.name,
+      submission.email,
+      submission.phone,
+      submission.category,
+      submission.message,
+    ],
+  );
+  return {
+    id: result.rows[0].id,
+    createdAt: result.rows[0].created_at,
+  };
+};
+
+export const listCitizenSubmissionsForEntity = async (entityId) => {
+  const result = await databasePool.query(
+    `SELECT citizen_submissions.*, portal_entities.label AS entity_label
+     FROM citizen_submissions
+     JOIN portal_entities ON portal_entities.id = citizen_submissions.entity_id
+     WHERE citizen_submissions.entity_id = $1
+     ORDER BY citizen_submissions.created_at DESC
+     LIMIT 200`,
+    [entityId],
+  );
+  return result.rows.map(mapCitizenSubmission);
+};
+
+export const updateCitizenSubmissionStatus = async (submissionId, entityId, status) => {
+  const result = await databasePool.query(
+    `UPDATE citizen_submissions
+     SET status = $3, updated_at = NOW()
+     WHERE id = $1 AND entity_id = $2
+     RETURNING *`,
+    [submissionId, entityId, status],
+  );
+  return result.rowCount ? mapCitizenSubmission(result.rows[0]) : null;
 };
 
 export const getDistrictSummary = async () => {

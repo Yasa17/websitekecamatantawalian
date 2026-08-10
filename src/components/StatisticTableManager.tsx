@@ -39,7 +39,7 @@ import {
 
 interface StatisticTableManagerProps {
   statistics: StatisticCategory[];
-  setStatistics: (statistics: StatisticCategory[]) => void;
+  setStatistics: (statistics: StatisticCategory[]) => Promise<boolean>;
   showToast: (message: string, type?: 'success' | 'info') => void;
 }
 
@@ -142,6 +142,8 @@ export default function StatisticTableManager({
   const [draftColumns, setDraftColumns] = useState<StatisticTableColumn[]>([]);
   const [importMode, setImportMode] = useState<'replace' | 'append'>('replace');
   const [isImporting, setIsImporting] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [isCreatingDataset, setIsCreatingDataset] = useState(false);
   const [showNewDataset, setShowNewDataset] = useState(false);
   const [newDataset, setNewDataset] = useState({
     title: '',
@@ -180,23 +182,14 @@ export default function StatisticTableManager({
     setDraftColumns(cloneColumns(activeTable.columns));
   }, [selectedCategory?.id]);
 
-  const replaceCategory = (
-    index: number,
-    category: StatisticCategory,
-  ) => {
-    setStatistics(
-      statistics.map((current, currentIndex) =>
-        currentIndex === index ? category : current,
-      ),
-    );
-  };
-
   const saveTable = (table: StatisticTable) => {
-    if (!selectedCategory) return;
-    replaceCategory(
-      safeSelectedIndex,
-      withStatisticTable(selectedCategory, table),
+    if (!selectedCategory) return Promise.resolve(false);
+    const next = statistics.map((current, currentIndex) =>
+      currentIndex === safeSelectedIndex
+        ? withStatisticTable(selectedCategory, table)
+        : current,
     );
+    return setStatistics(next);
   };
 
   const beginStructureEditor = () => {
@@ -220,7 +213,7 @@ export default function StatisticTableManager({
     );
   };
 
-  const handleSaveStructure = () => {
+  const handleSaveStructure = async () => {
     const nextLeaves = getStatisticLeafColumns(draftColumns);
     if (!nextLeaves.length) {
       showToast('Tambahkan minimal satu kolom sebelum menyimpan struktur.', 'info');
@@ -264,10 +257,11 @@ export default function StatisticTableManager({
       return;
     }
 
-    saveTable({
+    const success = await saveTable({
       columns: cloneColumns(draftColumns),
       rows: reconciledRows,
     });
+    if (!success) return;
     setIsEditingStructure(false);
     showToast('Struktur dan tipe data berhasil disimpan. Nilai lama sudah disesuaikan otomatis.');
   };
@@ -319,12 +313,15 @@ export default function StatisticTableManager({
     });
   };
 
-  const deleteDataRow = (rowId: string) => {
-    saveTable({
+  const deleteDataRow = async (rowId: string, rowNumber: number) => {
+    if (!confirm(`Hapus baris data nomor ${rowNumber}? Tindakan ini tidak dapat dibatalkan.`)) {
+      return;
+    }
+    const success = await saveTable({
       ...activeTable,
       rows: activeTable.rows.filter((row) => row.id !== rowId),
     });
-    showToast('Baris data dihapus.');
+    if (success) showToast('Baris data berhasil dihapus.');
   };
 
   const handleImportFile = async (file?: File) => {
@@ -332,13 +329,14 @@ export default function StatisticTableManager({
     setIsImporting(true);
     try {
       const rows = await readStatisticWorkbook(file, activeTable);
-      saveTable({
+      const success = await saveTable({
         ...activeTable,
         rows:
           importMode === 'append'
             ? [...activeTable.rows, ...rows]
             : rows,
       });
+      if (!success) return;
       showToast(
         `${rows.length} baris dari "${file.name}" berhasil diimpor (${importMode === 'append' ? 'ditambahkan' : 'mengganti data lama'}).`,
       );
@@ -353,7 +351,7 @@ export default function StatisticTableManager({
     }
   };
 
-  const handleCreateDataset = (event: React.FormEvent) => {
+  const handleCreateDataset = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!newDataset.title.trim()) return;
     const category: StatisticCategory = {
@@ -366,11 +364,44 @@ export default function StatisticTableManager({
       items: [],
       table: createDefaultStatisticTable(),
     };
-    setStatistics([...statistics, category]);
-    setSelectedIndex(statistics.length);
-    setNewDataset({ title: '', description: '', type: 'bar' });
+    setIsCreatingDataset(true);
+    try {
+      const success = await setStatistics([...statistics, category]);
+      if (!success) return;
+      setSelectedIndex(statistics.length);
+      setNewDataset({ title: '', description: '', type: 'bar' });
+      setShowNewDataset(false);
+      showToast(`Dataset "${category.title}" berhasil dibuat.`);
+    } finally {
+      setIsCreatingDataset(false);
+    }
+  };
+
+  const handleClearDataset = async () => {
+    if (!selectedCategory || !activeTable.rows.length) return;
+    if (!confirm(
+      `Kosongkan seluruh ${activeTable.rows.length} baris pada dataset “${selectedCategory.title}”? Struktur kolom tetap dipertahankan.`,
+    )) return;
+    setIsDeleting(true);
+    const success = await saveTable({ ...activeTable, rows: [] });
+    setIsDeleting(false);
+    if (success) showToast(`Seluruh data pada “${selectedCategory.title}” berhasil dikosongkan.`);
+  };
+
+  const handleDeleteDataset = async () => {
+    if (!selectedCategory) return;
+    if (!confirm(
+      `Hapus dataset “${selectedCategory.title}” beserta ${activeTable.rows.length} baris? Tindakan ini tidak dapat dibatalkan. Ekspor XLSX dahulu bila diperlukan.`,
+    )) return;
+    setIsDeleting(true);
+    const nextStatistics = statistics.filter((_, index) => index !== safeSelectedIndex);
+    const success = await setStatistics(nextStatistics);
+    setIsDeleting(false);
+    if (!success) return;
+    setSelectedIndex(Math.max(0, Math.min(safeSelectedIndex, nextStatistics.length - 1)));
+    setIsEditingStructure(false);
     setShowNewDataset(false);
-    showToast(`Dataset "${category.title}" berhasil dibuat.`);
+    showToast(`Dataset “${selectedCategory.title}” berhasil dihapus.`);
   };
 
   if (!selectedCategory) {
@@ -396,6 +427,7 @@ export default function StatisticTableManager({
             onChange={setNewDataset}
             onSubmit={handleCreateDataset}
             onCancel={() => setShowNewDataset(false)}
+            saving={isCreatingDataset}
           />
         )}
       </div>
@@ -517,6 +549,24 @@ export default function StatisticTableManager({
             <Plus className="h-4 w-4" />
             Dataset Baru
           </button>
+          <button
+            type="button"
+            disabled={isDeleting || isEditingStructure || activeTable.rows.length === 0}
+            onClick={() => void handleClearDataset()}
+            className="inline-flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2.5 text-xs font-bold text-amber-800 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <Trash2 className="h-4 w-4" />
+            Kosongkan Data
+          </button>
+          <button
+            type="button"
+            disabled={isDeleting || isEditingStructure || isImporting}
+            onClick={() => void handleDeleteDataset()}
+            className="inline-flex items-center gap-2 rounded-xl border border-red-200 bg-red-50 px-3.5 py-2.5 text-xs font-bold text-red-700 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <Trash2 className="h-4 w-4" />
+            {isDeleting ? 'Menghapus...' : 'Hapus Dataset'}
+          </button>
         </div>
       </div>
 
@@ -526,6 +576,7 @@ export default function StatisticTableManager({
           onChange={setNewDataset}
           onSubmit={handleCreateDataset}
           onCancel={() => setShowNewDataset(false)}
+          saving={isCreatingDataset}
         />
       )}
 
@@ -561,7 +612,7 @@ export default function StatisticTableManager({
               </button>
               <button
                 type="button"
-                onClick={handleSaveStructure}
+                onClick={() => void handleSaveStructure()}
                 className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-2 text-xs font-bold text-white shadow-sm hover:bg-indigo-700"
               >
                 <Save className="h-4 w-4" />
@@ -874,7 +925,7 @@ export default function StatisticTableManager({
                       <td className="border border-slate-100 p-2 text-center">
                         <button
                           type="button"
-                          onClick={() => deleteDataRow(row.id)}
+                          onClick={() => void deleteDataRow(row.id, rowIndex + 1)}
                           className="rounded-lg p-2 text-red-600 hover:bg-red-50"
                           title="Hapus baris"
                         >
@@ -908,6 +959,7 @@ interface NewDatasetFormProps {
   >;
   onSubmit: (event: React.FormEvent) => void;
   onCancel: () => void;
+  saving: boolean;
 }
 
 function NewDatasetForm({
@@ -915,6 +967,7 @@ function NewDatasetForm({
   onChange,
   onSubmit,
   onCancel,
+  saving,
 }: NewDatasetFormProps) {
   return (
     <form
@@ -982,10 +1035,11 @@ function NewDatasetForm({
       <div className="mt-4 flex justify-end">
         <button
           type="submit"
-          className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2.5 text-xs font-bold text-white hover:bg-indigo-700"
+          disabled={saving}
+          className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2.5 text-xs font-bold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
         >
           <Save className="h-4 w-4" />
-          Buat Dataset
+          {saving ? 'Menyimpan...' : 'Buat Dataset'}
         </button>
       </div>
     </form>

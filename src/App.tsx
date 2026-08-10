@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Building2, Heart, Landmark, LogOut, Mail, MapPin, Phone } from 'lucide-react';
 import { AdminProfile, GalleryItem, News, PortalData, StatisticCategory, VillageProfile } from './types';
 import { ApiError, apiRequest, clearApiToken, getApiToken, setApiToken } from './services/api';
@@ -40,6 +40,8 @@ export default function App() {
   const [districtEntities, setDistrictEntities] = useState<DistrictEntitySummary[]>([]);
   const [currentTab, setCurrentTab] = useState('beranda');
   const [selectedNews, setSelectedNews] = useState<News | null>(null);
+  const entityMutationQueues = useRef(new Map<string, Promise<void>>());
+  const entityMutationRevisions = useRef(new Map<string, number>());
 
   const activeEntity = useMemo(
     () =>
@@ -127,13 +129,14 @@ export default function App() {
     localStorage.setItem(ACTIVE_ENTITY_STORAGE_KEY, entityId);
   };
 
-  const updateAssignedEntityContent = (updates: Partial<typeof activeEntity.content>) => {
-    if (!currentAdmin?.assignedEntityId) return;
-    if (currentAdmin.role === 'super_admin' && updates.statistics !== undefined) return;
+  const updateAssignedEntityContent = async (
+    updates: Partial<typeof activeEntity.content>,
+  ): Promise<boolean> => {
+    if (!currentAdmin?.assignedEntityId) return false;
+    if (currentAdmin.role === 'super_admin' && updates.statistics !== undefined) return false;
     const entityId = currentAdmin.assignedEntityId;
-    const previousContent = portalData.entities.find(
-      (entity) => entity.id === entityId,
-    )?.content;
+    const revision = (entityMutationRevisions.current.get(entityId) || 0) + 1;
+    entityMutationRevisions.current.set(entityId, revision);
 
     setPortalData((current) => current ? ({
         ...current,
@@ -144,21 +147,48 @@ export default function App() {
         ),
       }) : current);
 
-    void apiRequest(`/api/entities/${entityId}/content`, {
-      method: 'PATCH',
-      body: JSON.stringify({ updates }),
-    }).catch((error) => {
-      if (previousContent) {
-        setPortalData((current) => current ? ({
+    const previousQueue = entityMutationQueues.current.get(entityId) || Promise.resolve();
+    const operation = previousQueue.catch(() => undefined).then(async () => {
+      try {
+        const response = await apiRequest<{ data: typeof activeEntity.content }>(
+          `/api/entities/${entityId}/content`,
+          {
+            method: 'PATCH',
+            body: JSON.stringify({ updates }),
+          },
+        );
+        if (entityMutationRevisions.current.get(entityId) === revision) {
+          setPortalData((current) => current ? ({
             ...current,
             entities: current.entities.map((entity) =>
               entity.id === entityId
-                ? { ...entity, content: previousContent }
+                ? { ...entity, content: response.data }
                 : entity,
             ),
           }) : current);
+        }
+        return true;
+      } catch (error) {
+        if (entityMutationRevisions.current.get(entityId) === revision) {
+          try {
+            const fresh = await apiRequest<{ data: PortalData }>('/api/portal');
+            if (entityMutationRevisions.current.get(entityId) === revision) {
+              setPortalData(fresh.data);
+            }
+          } catch (reloadError) {
+            console.error('Data portal gagal dimuat ulang setelah penyimpanan gagal:', reloadError);
+          }
+        }
+        alert(error instanceof Error ? error.message : 'Data gagal disimpan ke backend.');
+        return false;
       }
-      alert(error instanceof Error ? error.message : 'Data gagal disimpan ke backend.');
+    });
+    const queueTail = operation.then(() => undefined);
+    entityMutationQueues.current.set(entityId, queueTail);
+    return operation.finally(() => {
+      if (entityMutationQueues.current.get(entityId) === queueTail) {
+        entityMutationQueues.current.delete(entityId);
+      }
     });
   };
 
@@ -171,28 +201,31 @@ export default function App() {
   const setGallery = (nextGallery: GalleryItem[]) =>
     updateAssignedEntityContent({ gallery: nextGallery });
 
-  const setAdminProfile = (
+  const setAdminProfile = async (
     profile: AdminProfile,
     currentPassword?: string,
-  ) => {
+  ): Promise<boolean> => {
     const fields = {
       name: profile.name,
       username: profile.username,
       email: profile.email,
       avatarUrl: profile.avatarUrl,
     };
-    void apiRequest<{ data: AdminProfile }>('/api/admin/profile', {
-      method: 'PATCH',
-      body: JSON.stringify({
-        fields,
-        currentPassword,
-        newPassword: profile.password || undefined,
-      }),
-    })
-      .then((response) => setCurrentAdmin(response.data))
-      .catch((error) => {
-        alert(error instanceof Error ? error.message : 'Profil admin gagal disimpan.');
+    try {
+      const response = await apiRequest<{ data: AdminProfile }>('/api/admin/profile', {
+        method: 'PATCH',
+        body: JSON.stringify({
+          fields,
+          currentPassword,
+          newPassword: profile.password || undefined,
+        }),
       });
+      setCurrentAdmin(response.data);
+      return true;
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'Profil admin gagal disimpan.');
+      return false;
+    }
   };
 
   const loadDistrictSummary = async () => {
@@ -369,7 +402,12 @@ export default function App() {
             />
           )}
           {currentTab === 'galeri' && <GaleriView gallery={gallery} villageProfile={villageProfile} />}
-          {currentTab === 'kontak' && <KontakView villageProfile={villageProfile} />}
+          {currentTab === 'kontak' && (
+            <KontakView
+              villageProfile={villageProfile}
+              entityId={selectedEntityId}
+            />
+          )}
         </div>
       </div>
 

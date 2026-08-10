@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   LayoutDashboard,
   Landmark,
@@ -22,23 +22,27 @@ import {
   ShieldCheck,
   AlertCircle,
   LoaderCircle,
+  MessagesSquare,
+  PhoneCall,
 } from 'lucide-react';
 import { VillageProfile, StatisticCategory, News, GalleryItem, AdminProfile } from '../types';
 import { formatImageSize, processImageToWebP, type ProcessedImage } from '../utils/imageUpload';
 import { DistrictDataRecap, type DistrictEntitySummary } from './DistrictSummary';
 import StatisticTableManager from './StatisticTableManager';
+import ContactSettingsEditor from './ContactSettingsEditor';
+import CitizenSubmissionManager from './CitizenSubmissionManager';
 
 interface AdminDashboardProps {
   villageProfile: VillageProfile;
-  setVillageProfile: (p: VillageProfile) => void;
+  setVillageProfile: (p: VillageProfile) => Promise<boolean>;
   statistics: StatisticCategory[];
-  setStatistics: (s: StatisticCategory[]) => void;
+  setStatistics: (s: StatisticCategory[]) => Promise<boolean>;
   news: News[];
-  setNews: (n: News[]) => void;
+  setNews: (n: News[]) => Promise<boolean>;
   gallery: GalleryItem[];
-  setGallery: (g: GalleryItem[]) => void;
+  setGallery: (g: GalleryItem[]) => Promise<boolean>;
   adminProfile: AdminProfile;
-  setAdminProfile: (a: AdminProfile, currentPassword?: string) => void;
+  setAdminProfile: (a: AdminProfile, currentPassword?: string) => Promise<boolean>;
   districtEntities?: DistrictEntitySummary[];
   onLogout: () => void;
 }
@@ -57,7 +61,7 @@ export default function AdminDashboard({
   districtEntities = [],
   onLogout,
 }: AdminDashboardProps) {
-  const [activeTab, setActiveTab] = useState<'overview' | 'profil' | 'stats' | 'news' | 'gallery' | 'profile_admin'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'profil' | 'contact' | 'submissions' | 'stats' | 'news' | 'gallery' | 'profile_admin'>('overview');
   const unitLabel = villageProfile.contentLabel || (villageProfile.administrationLevel === 'kecamatan' ? 'Kecamatan' : villageProfile.administrationLevel === 'kelurahan' ? 'Kelurahan' : 'Desa');
   const headRole = villageProfile.headRole || (unitLabel === 'Kecamatan' ? 'Camat' : 'Kepala Desa');
   const roleLabel = adminProfile.role === 'super_admin' ? 'ADMIN KECAMATAN' : `ADMIN ${unitLabel.toUpperCase()}`;
@@ -99,6 +103,9 @@ export default function AdminDashboard({
   });
   const [currentPassword, setCurrentPassword] = useState('');
   const [processingImageField, setProcessingImageField] = useState<string | null>(null);
+  const [savingOperation, setSavingOperation] = useState<
+    null | 'profile' | 'news' | 'gallery' | 'credentials'
+  >(null);
 
   // VILLAGE PROFILE States & Staff fields
   const [villageForm, setVillageForm] = useState<VillageProfile>({ ...villageProfile });
@@ -106,6 +113,20 @@ export default function AdminDashboard({
   const [newStaffName, setNewStaffName] = useState('');
   const [newStaffRole, setNewStaffRole] = useState('');
   const [newStaffPhoto, setNewStaffPhoto] = useState('');
+
+  useEffect(() => {
+    setVillageForm({ ...villageProfile });
+  }, [villageProfile]);
+
+  useEffect(() => {
+    setLocalProfileForm((current) => ({
+      ...current,
+      name: adminProfile.name,
+      username: adminProfile.username,
+      email: adminProfile.email,
+      avatarUrl: adminProfile.avatarUrl,
+    }));
+  }, [adminProfile]);
 
   // Toast trigger
   const showToast = (message: string, type: 'success' | 'info' = 'success') => {
@@ -198,10 +219,16 @@ export default function AdminDashboard({
   };
 
   // 1. SAVE VILLAGE PROFILE
-  const handleSaveVillageProfile = (e: React.FormEvent) => {
+  const handleSaveVillageProfile = async (e: React.FormEvent) => {
     e.preventDefault();
-    setVillageProfile(villageForm);
-    showToast(`Profil ${unitLabel} berhasil diperbarui dan dipublikasikan!`);
+    if (savingOperation) return;
+    setSavingOperation('profile');
+    try {
+      const success = await setVillageProfile(villageForm);
+      if (success) showToast(`Profil ${unitLabel} berhasil diperbarui dan dipublikasikan!`);
+    } finally {
+      setSavingOperation(null);
+    }
   };
 
   const handleAddMission = () => {
@@ -270,56 +297,61 @@ export default function AdminDashboard({
   };
 
   // 2. NEWS CRUD
-  const handleSaveNews = (e: React.FormEvent) => {
+  const handleSaveNews = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newsForm.title.trim() || !newsForm.content.trim() || !newsForm.thumbnail) {
       showToast('Judul, isi berita, dan thumbnail wajib diisi.', 'info');
       return;
     }
+    if (savingOperation) return;
+    setSavingOperation('news');
 
-    if (editingNews) {
-      // Edit mode
-      const updatedNews = news.map((item) =>
-        item.id === editingNews.id
-          ? {
-              ...item,
-              title: newsForm.title,
-              content: newsForm.content,
-              category: newsForm.category,
-              thumbnail: newsForm.thumbnail,
-              status: newsForm.status,
-              datePublished: item.datePublished || new Date().toISOString().split('T')[0],
-            }
-          : item
-      );
-      setNews(updatedNews);
-      setEditingNews(null);
-      setIsAddingNews(false);
-      showToast('Berita berhasil diperbarui!');
-    } else {
-      // Add mode
-      const newArticle: News = {
-        id: String(Date.now()),
-        title: newsForm.title,
-        content: newsForm.content,
-        category: newsForm.category,
-        thumbnail: newsForm.thumbnail,
-        status: newsForm.status,
-        datePublished: new Date().toISOString().split('T')[0],
-      };
-      setNews([newArticle, ...news]);
-      setIsAddingNews(false);
-      showToast('Berita baru berhasil dipublikasikan!');
+    try {
+      if (editingNews) {
+        const updatedNews = news.map((item) =>
+          item.id === editingNews.id
+            ? {
+                ...item,
+                title: newsForm.title,
+                content: newsForm.content,
+                category: newsForm.category,
+                thumbnail: newsForm.thumbnail,
+                status: newsForm.status,
+                datePublished: item.datePublished || new Date().toISOString().split('T')[0],
+              }
+            : item
+        );
+        const success = await setNews(updatedNews);
+        if (!success) return;
+        setEditingNews(null);
+        setIsAddingNews(false);
+        showToast('Berita berhasil diperbarui!');
+      } else {
+        const newArticle: News = {
+          id: String(Date.now()),
+          title: newsForm.title,
+          content: newsForm.content,
+          category: newsForm.category,
+          thumbnail: newsForm.thumbnail,
+          status: newsForm.status,
+          datePublished: new Date().toISOString().split('T')[0],
+        };
+        const success = await setNews([newArticle, ...news]);
+        if (!success) return;
+        setIsAddingNews(false);
+        showToast('Berita baru berhasil dipublikasikan!');
+      }
+
+      setNewsForm({
+        title: '',
+        content: '',
+        category: 'Umum',
+        thumbnail: '',
+        status: 'Published',
+      });
+    } finally {
+      setSavingOperation(null);
     }
-
-    // Reset Form
-    setNewsForm({
-      title: '',
-      content: '',
-      category: 'Umum',
-      thumbnail: '',
-      status: 'Published',
-    });
   };
 
   const handleEditNewsClick = (item: News) => {
@@ -334,15 +366,15 @@ export default function AdminDashboard({
     setIsAddingNews(true);
   };
 
-  const handleDeleteNews = (id: string) => {
+  const handleDeleteNews = async (id: string) => {
     const confirmation = confirm('Apakah Anda yakin ingin menghapus berita ini secara permanen?');
     if (!confirmation) return;
-    setNews(news.filter(n => n.id !== id));
-    showToast('Berita berhasil dihapus.');
+    const success = await setNews(news.filter(n => n.id !== id));
+    if (success) showToast('Berita berhasil dihapus.');
   };
 
   // 4. GALLERY OPERATIONS
-  const handleAddGalleryItem = (e: React.FormEvent) => {
+  const handleAddGalleryItem = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!galleryForm.title.trim()) {
       showToast('Judul dokumentasi wajib diisi!', 'info');
@@ -353,43 +385,48 @@ export default function AdminDashboard({
       showToast('Setiap album wajib berisi minimal 1 dan maksimal 5 foto.', 'info');
       return;
     }
+    if (savingOperation) return;
+    setSavingOperation('gallery');
     const primaryUrl = galleryPhotoUrls[0];
 
-    if (isEditingGalleryMode && editingGalleryItem) {
-      // Edit gallery item in place
-      const updatedGallery = gallery.map((g) =>
-        g.id === editingGalleryItem.id
-          ? {
-              ...g,
-              title: galleryForm.title.trim(),
-              category: galleryForm.category,
-              url: primaryUrl,
-              urls: galleryPhotoUrls,
-            }
-          : g
-      );
-      setGallery(updatedGallery);
-      showToast('Item album galeri berhasil diperbarui!');
-    } else {
-      // Add new gallery item
-      const newItem: GalleryItem = {
-        id: `g_${Date.now()}`,
-        url: primaryUrl,
-        urls: galleryPhotoUrls,
-        title: galleryForm.title.trim(),
-        category: galleryForm.category,
-        dateAdded: new Date().toISOString().split('T')[0]
-      };
-      setGallery([newItem, ...gallery]);
-      showToast(`Album galeri baru berhasil dibuat dengan ${galleryPhotoUrls.length} foto!`);
-    }
+    try {
+      if (isEditingGalleryMode && editingGalleryItem) {
+        const updatedGallery = gallery.map((g) =>
+          g.id === editingGalleryItem.id
+            ? {
+                ...g,
+                title: galleryForm.title.trim(),
+                category: galleryForm.category,
+                url: primaryUrl,
+                urls: galleryPhotoUrls,
+              }
+            : g
+        );
+        const success = await setGallery(updatedGallery);
+        if (!success) return;
+        showToast('Item album galeri berhasil diperbarui!');
+      } else {
+        const newItem: GalleryItem = {
+          id: `g_${Date.now()}`,
+          url: primaryUrl,
+          urls: galleryPhotoUrls,
+          title: galleryForm.title.trim(),
+          category: galleryForm.category,
+          dateAdded: new Date().toISOString().split('T')[0]
+        };
+        const success = await setGallery([newItem, ...gallery]);
+        if (!success) return;
+        showToast(`Album galeri baru berhasil dibuat dengan ${galleryPhotoUrls.length} foto!`);
+      }
 
-    // Reset Gallery Fields
-    setGalleryForm({ url: '', title: '', category: 'Kegiatan' });
-    setGalleryPhotoUrls([]);
-    setProcessedGalleryImages([]);
-    setEditingGalleryItem(null);
-    setIsEditingGalleryMode(false);
+      setGalleryForm({ url: '', title: '', category: 'Kegiatan' });
+      setGalleryPhotoUrls([]);
+      setProcessedGalleryImages([]);
+      setEditingGalleryItem(null);
+      setIsEditingGalleryMode(false);
+    } finally {
+      setSavingOperation(null);
+    }
   };
 
   const handleEditGalleryClick = (item: GalleryItem) => {
@@ -407,33 +444,41 @@ export default function AdminDashboard({
     showToast(`Mengedit album "${item.title}"...`, 'info');
   };
 
-  const handleDeleteGalleryItem = (id: string) => {
+  const handleDeleteGalleryItem = async (id: string) => {
     const confirmation = confirm('Apakah Anda yakin ingin menghapus album galeri ini?');
     if (!confirmation) return;
-    setGallery(gallery.filter(g => g.id !== id));
-    showToast('Album galeri berhasil dihapus.');
+    const success = await setGallery(gallery.filter(g => g.id !== id));
+    if (success) showToast('Album galeri berhasil dihapus.');
   };
 
   // 5. PROFILE ACCOUNT ADMIN SETTINGS
-  const handleSaveProfileAdmin = (e: React.FormEvent) => {
+  const handleSaveProfileAdmin = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!localProfileForm.username.trim() || !localProfileForm.name.trim()) return;
     if (localProfileForm.password && !currentPassword) {
       showToast('Masukkan kata sandi saat ini untuk mengganti kata sandi.', 'info');
       return;
     }
+    if (savingOperation) return;
+    setSavingOperation('credentials');
 
-    setAdminProfile({
-      name: localProfileForm.name,
-      username: localProfileForm.username,
-      email: localProfileForm.email,
-      password: localProfileForm.password,
-      avatarUrl: localProfileForm.avatarUrl || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?q=80&w=200&auto=format&fit=crop'
-    }, currentPassword);
+    try {
+      const success = await setAdminProfile({
+        name: localProfileForm.name,
+        username: localProfileForm.username,
+        email: localProfileForm.email,
+        password: localProfileForm.password,
+        avatarUrl: localProfileForm.avatarUrl || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?q=80&w=200&auto=format&fit=crop'
+      }, currentPassword);
 
-    setCurrentPassword('');
-    setLocalProfileForm((current) => ({ ...current, password: '' }));
-    showToast('Permintaan pembaruan profil admin dikirim ke backend.');
+      if (!success) return;
+
+      setCurrentPassword('');
+      setLocalProfileForm((current) => ({ ...current, password: '' }));
+      showToast('Profil admin berhasil disimpan ke backend.');
+    } finally {
+      setSavingOperation(null);
+    }
   };
 
   return (
@@ -475,6 +520,26 @@ export default function AdminDashboard({
           >
             <Landmark className="h-4 w-4 shrink-0" />
             <span>Kelola Profil {unitLabel}</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('contact')}
+            className={`w-full py-3 px-4 rounded-xl text-xs font-bold leading-none flex items-center space-x-3 transition-colors ${
+              activeTab === 'contact' ? 'bg-amber-600 text-white shadow-md font-extrabold' : 'hover:bg-slate-800 text-slate-350'
+            }`}
+          >
+            <PhoneCall className="h-4 w-4 shrink-0" />
+            <span>Informasi Penghubung</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('submissions')}
+            className={`w-full py-3 px-4 rounded-xl text-xs font-bold leading-none flex items-center space-x-3 transition-colors ${
+              activeTab === 'submissions' ? 'bg-amber-600 text-white shadow-md font-extrabold' : 'hover:bg-slate-800 text-slate-350'
+            }`}
+          >
+            <MessagesSquare className="h-4 w-4 shrink-0" />
+            <span>Aspirasi & Aduan</span>
           </button>
 
           <button
@@ -608,11 +673,11 @@ export default function AdminDashboard({
               </div>
               <button
                 type="submit"
-                disabled={processingImageField !== null}
+                disabled={processingImageField !== null || savingOperation !== null}
                 className="px-4 py-2 bg-amber-600 hover:bg-amber-500 disabled:bg-gray-300 disabled:cursor-not-allowed rounded-lg text-white font-bold text-xs tracking-wide flex items-center space-x-1.5 transition-all shadow active:scale-95 cursor-pointer"
               >
                 <Save className="h-3.5 w-3.5" />
-                <span>Simpan Profil</span>
+                <span>{savingOperation === 'profile' ? 'Menyimpan...' : 'Simpan Profil'}</span>
               </button>
             </div>
 
@@ -838,7 +903,7 @@ export default function AdminDashboard({
                   <button
                     type="button"
                     onClick={handleAddStaff}
-                    disabled={processingImageField !== null}
+                    disabled={processingImageField !== null || savingOperation !== null}
                     className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white font-bold text-xs rounded-lg flex items-center space-x-1"
                   >
                     <Plus className="h-3.5 w-3.5" />
@@ -925,6 +990,16 @@ export default function AdminDashboard({
             </div>
           </form>
         )}
+
+        {activeTab === 'contact' && (
+          <ContactSettingsEditor
+            villageProfile={villageProfile}
+            onSave={setVillageProfile}
+            showToast={showToast}
+          />
+        )}
+
+        {activeTab === 'submissions' && <CitizenSubmissionManager />}
 
         {/* TAB 3: STATISTIC DATA MANAGER */}
         {activeTab === 'stats' && (
@@ -1056,11 +1131,15 @@ export default function AdminDashboard({
                 <div className="flex gap-2.5 pt-2">
                   <button
                     type="submit"
-                    disabled={processingImageField !== null}
+                    disabled={processingImageField !== null || savingOperation !== null}
                     className="px-4 py-2 bg-teal-700 hover:bg-teal-600 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-lg text-xs font-bold flex items-center space-x-1.5"
                   >
                     <Save className="h-4 w-4" />
-                    <span>{editingNews ? 'Perbarui Rilis' : 'Terbitkan Berita'}</span>
+                    <span>
+                      {savingOperation === 'news'
+                        ? 'Menyimpan...'
+                        : editingNews ? 'Perbarui Rilis' : 'Terbitkan Berita'}
+                    </span>
                   </button>
                   <button
                     type="button"
@@ -1253,10 +1332,15 @@ export default function AdminDashboard({
 
                   <button
                     type="submit"
-                    disabled={isProcessingGalleryImage}
+                    disabled={isProcessingGalleryImage || savingOperation !== null}
                     className="w-full py-2.5 bg-indigo-700 hover:bg-indigo-650 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-lg text-xs font-bold flex items-center justify-center space-x-1.5 shadow active:scale-[0.98] transition-all cursor-pointer"
                   >
-                    {isEditingGalleryMode ? (
+                    {savingOperation === 'gallery' ? (
+                      <>
+                        <LoaderCircle className="h-4 w-4 animate-spin" />
+                        <span>Menyimpan...</span>
+                      </>
+                    ) : isEditingGalleryMode ? (
                       <>
                         <Save className="h-4 w-4" />
                         <span>Simpan Perubahan Album</span>
@@ -1346,11 +1430,11 @@ export default function AdminDashboard({
               </div>
               <button
                 type="submit"
-                disabled={processingImageField !== null}
+                disabled={processingImageField !== null || savingOperation !== null}
                 className="px-4 py-2 bg-gradient-to-r from-amber-600 to-amber-700 disabled:from-gray-300 disabled:to-gray-300 disabled:cursor-not-allowed text-white rounded-lg text-xs font-bold flex items-center space-x-1.5 transition-all shadow active:scale-95 cursor-pointer"
               >
                 <Save className="h-3.5 w-3.5" />
-                <span>Simpan Kredensial</span>
+                <span>{savingOperation === 'credentials' ? 'Menyimpan...' : 'Simpan Kredensial'}</span>
               </button>
             </div>
 
