@@ -10,6 +10,8 @@ import {
   FileText,
   Folder,
   FolderPlus,
+  Image as ImageIcon,
+  LoaderCircle,
   PencilLine,
   Plus,
   Save,
@@ -20,9 +22,16 @@ import {
 } from 'lucide-react';
 import {
   StatisticCategory,
+  StatisticDataCategory,
   StatisticTable,
   StatisticTableColumn,
 } from '../types';
+import { formatImageSize, processImageToWebP } from '../utils/imageUpload';
+import {
+  DEFAULT_STATISTIC_DATA_CATEGORY,
+  STATISTIC_DATA_CATEGORY_OPTIONS,
+  resolveStatisticMetadata,
+} from '../utils/statisticMetadata';
 import {
   buildStatisticHeaderRows,
   createDefaultStatisticTable,
@@ -144,11 +153,15 @@ export default function StatisticTableManager({
   const [isImporting, setIsImporting] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isCreatingDataset, setIsCreatingDataset] = useState(false);
+  const [isSavingMetadata, setIsSavingMetadata] = useState(false);
+  const [processingThumbnail, setProcessingThumbnail] = useState<'new' | 'existing' | null>(null);
   const [showNewDataset, setShowNewDataset] = useState(false);
   const [newDataset, setNewDataset] = useState({
     title: '',
     description: '',
     type: 'bar' as StatisticCategory['type'],
+    dataCategory: DEFAULT_STATISTIC_DATA_CATEGORY as StatisticDataCategory,
+    thumbnail: '',
   });
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -157,6 +170,14 @@ export default function StatisticTableManager({
     Math.max(0, statistics.length - 1),
   );
   const selectedCategory = statistics[safeSelectedIndex];
+  const selectedCategoryIdRef = useRef(selectedCategory?.id);
+  selectedCategoryIdRef.current = selectedCategory?.id;
+  const [metadataForm, setMetadataForm] = useState({
+    dataCategory: DEFAULT_STATISTIC_DATA_CATEGORY as StatisticDataCategory,
+    thumbnail: '',
+  });
+  const isExistingMetadataBusy =
+    isSavingMetadata || processingThumbnail === 'existing';
   const activeTable = useMemo(
     () =>
       selectedCategory
@@ -181,6 +202,46 @@ export default function StatisticTableManager({
     setIsEditingStructure(false);
     setDraftColumns(cloneColumns(activeTable.columns));
   }, [selectedCategory?.id]);
+
+  useEffect(() => {
+    if (!selectedCategory) return;
+    const metadata = resolveStatisticMetadata(selectedCategory);
+    setMetadataForm({
+      dataCategory: metadata.dataCategory,
+      thumbnail: metadata.thumbnail,
+    });
+  }, [selectedCategory?.id, selectedCategory?.dataCategory, selectedCategory?.thumbnail]);
+
+  const processThumbnail = async (
+    file: File,
+    target: 'new' | 'existing',
+    expectedCategoryId?: string,
+  ) => {
+    setProcessingThumbnail(target);
+    try {
+      const processed = await processImageToWebP(file);
+      if (target === 'new') {
+        setNewDataset((current) => ({ ...current, thumbnail: processed.dataUrl }));
+      } else {
+        if (selectedCategoryIdRef.current !== expectedCategoryId) {
+          showToast(
+            'Dataset aktif sudah berubah. Silakan pilih thumbnail kembali pada dataset yang benar.',
+            'info',
+          );
+          return;
+        }
+        setMetadataForm((current) => ({ ...current, thumbnail: processed.dataUrl }));
+      }
+      showToast(`Thumbnail dikonversi ke WebP (${formatImageSize(processed.size)}).`);
+    } catch (error) {
+      showToast(
+        error instanceof Error ? error.message : 'Thumbnail gagal diproses.',
+        'info',
+      );
+    } finally {
+      setProcessingThumbnail(null);
+    }
+  };
 
   const saveTable = (table: StatisticTable) => {
     if (!selectedCategory) return Promise.resolve(false);
@@ -353,7 +414,10 @@ export default function StatisticTableManager({
 
   const handleCreateDataset = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (!newDataset.title.trim()) return;
+    if (!newDataset.title.trim() || !newDataset.thumbnail) {
+      showToast('Judul dan thumbnail dataset wajib diisi.', 'info');
+      return;
+    }
     const category: StatisticCategory = {
       id: createStatisticId('stat'),
       title: newDataset.title.trim(),
@@ -361,6 +425,8 @@ export default function StatisticTableManager({
         newDataset.description.trim() ||
         'Dataset statistik wilayah yang dapat disusun secara fleksibel.',
       type: newDataset.type,
+      dataCategory: newDataset.dataCategory,
+      thumbnail: newDataset.thumbnail,
       items: [],
       table: createDefaultStatisticTable(),
     };
@@ -369,11 +435,38 @@ export default function StatisticTableManager({
       const success = await setStatistics([...statistics, category]);
       if (!success) return;
       setSelectedIndex(statistics.length);
-      setNewDataset({ title: '', description: '', type: 'bar' });
+      setNewDataset({
+        title: '',
+        description: '',
+        type: 'bar',
+        dataCategory: DEFAULT_STATISTIC_DATA_CATEGORY,
+        thumbnail: '',
+      });
       setShowNewDataset(false);
       showToast(`Dataset "${category.title}" berhasil dibuat.`);
     } finally {
       setIsCreatingDataset(false);
+    }
+  };
+
+  const handleSaveDatasetMetadata = async () => {
+    if (!selectedCategory || !metadataForm.thumbnail || isSavingMetadata) return;
+    setIsSavingMetadata(true);
+    try {
+      const nextStatistics = statistics.map((category, index) =>
+        index === safeSelectedIndex
+          ? {
+              ...category,
+              dataCategory: metadataForm.dataCategory,
+              thumbnail: metadataForm.thumbnail,
+            }
+          : category,
+      );
+      const success = await setStatistics(nextStatistics);
+      if (!success) return;
+      showToast(`Kategori dan thumbnail "${selectedCategory.title}" berhasil disimpan.`);
+    } finally {
+      setIsSavingMetadata(false);
     }
   };
 
@@ -428,6 +521,8 @@ export default function StatisticTableManager({
             onSubmit={handleCreateDataset}
             onCancel={() => setShowNewDataset(false)}
             saving={isCreatingDataset}
+            processingThumbnail={processingThumbnail === 'new'}
+            onThumbnailFile={(file) => void processThumbnail(file, 'new')}
           />
         )}
       </div>
@@ -531,8 +626,9 @@ export default function StatisticTableManager({
             </span>
             <select
               value={safeSelectedIndex}
+              disabled={isExistingMetadataBusy}
               onChange={(event) => setSelectedIndex(Number(event.target.value))}
-              className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-xs font-bold text-slate-800 outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-100"
+              className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-xs font-bold text-slate-800 outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-100 disabled:cursor-not-allowed disabled:opacity-60"
             >
               {statistics.map((category, index) => (
                 <option key={category.id} value={index}>
@@ -543,8 +639,9 @@ export default function StatisticTableManager({
           </label>
           <button
             type="button"
+            disabled={processingThumbnail !== null || isSavingMetadata || isCreatingDataset}
             onClick={() => setShowNewDataset((current) => !current)}
-            className="inline-flex items-center gap-2 rounded-xl border border-indigo-200 bg-indigo-50 px-3.5 py-2.5 text-xs font-bold text-indigo-700 hover:bg-indigo-100"
+            className="inline-flex items-center gap-2 rounded-xl border border-indigo-200 bg-indigo-50 px-3.5 py-2.5 text-xs font-bold text-indigo-700 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <Plus className="h-4 w-4" />
             Dataset Baru
@@ -577,8 +674,104 @@ export default function StatisticTableManager({
           onSubmit={handleCreateDataset}
           onCancel={() => setShowNewDataset(false)}
           saving={isCreatingDataset}
+          processingThumbnail={processingThumbnail === 'new'}
+          onThumbnailFile={(file) => void processThumbnail(file, 'new')}
         />
       )}
+
+      <section className="rounded-2xl border border-teal-200 bg-teal-50/40 p-5">
+        <div className="mb-4">
+          <h3 className="text-sm font-extrabold text-teal-950">
+            Kategori & Thumbnail Dataset
+          </h3>
+          <p className="mt-1 text-[11px] leading-relaxed text-teal-700">
+            Metadata ini disimpan bersama dataset dan digunakan pada kartu katalog statistik publik.
+          </p>
+        </div>
+        <div className="grid gap-4 lg:grid-cols-[minmax(220px,0.8fr)_minmax(280px,1.2fr)_auto] lg:items-end">
+          <label className="block">
+            <span className="mb-1.5 block text-[10px] font-extrabold uppercase tracking-wider text-teal-800">
+              Kategori Data
+            </span>
+            <select
+              value={metadataForm.dataCategory}
+              disabled={isExistingMetadataBusy}
+              onChange={(event) => setMetadataForm((current) => ({
+                ...current,
+                dataCategory: event.target.value as StatisticDataCategory,
+              }))}
+              className="w-full rounded-xl border border-teal-200 bg-white px-3.5 py-2.5 text-xs font-bold text-slate-800 outline-none focus:border-teal-500 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {STATISTIC_DATA_CATEGORY_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <div>
+            <span className="mb-1.5 block text-[10px] font-extrabold uppercase tracking-wider text-teal-800">
+              Thumbnail Data
+            </span>
+            <div className="flex items-center gap-3">
+              <div className="h-16 w-24 shrink-0 overflow-hidden rounded-xl border border-teal-200 bg-white">
+                {metadataForm.thumbnail ? (
+                  <img
+                    src={metadataForm.thumbnail}
+                    alt={`Thumbnail ${selectedCategory.title}`}
+                    className="h-full w-full object-cover"
+                  />
+                ) : (
+                  <ImageIcon className="m-auto h-full w-6 text-teal-300" />
+                )}
+              </div>
+              <div className="flex-1">
+                <input
+                  id={`statistic-thumbnail-${selectedCategory.id}`}
+                  type="file"
+                  accept="image/*"
+                  disabled={processingThumbnail !== null || isSavingMetadata}
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    if (file) {
+                      void processThumbnail(file, 'existing', selectedCategory.id);
+                    }
+                    event.currentTarget.value = '';
+                  }}
+                  className="hidden"
+                />
+                <label
+                  htmlFor={`statistic-thumbnail-${selectedCategory.id}`}
+                  aria-disabled={isExistingMetadataBusy}
+                  className={`inline-flex w-full items-center justify-center gap-2 rounded-xl border border-teal-200 bg-white px-3.5 py-2.5 text-xs font-bold text-teal-800 ${
+                    isExistingMetadataBusy
+                      ? 'cursor-not-allowed opacity-60'
+                      : 'cursor-pointer hover:bg-teal-50'
+                  }`}
+                >
+                  {processingThumbnail === 'existing' ? (
+                    <LoaderCircle className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Upload className="h-4 w-4" />
+                  )}
+                  {processingThumbnail === 'existing' ? 'Mengonversi...' : 'Pilih Thumbnail Baru'}
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            disabled={isSavingMetadata || processingThumbnail !== null || !metadataForm.thumbnail}
+            onClick={() => void handleSaveDatasetMetadata()}
+            className="inline-flex items-center justify-center gap-2 rounded-xl bg-teal-700 px-4 py-2.5 text-xs font-bold text-white hover:bg-teal-600 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {isSavingMetadata ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+            {isSavingMetadata ? 'Menyimpan...' : 'Simpan Tampilan'}
+          </button>
+        </div>
+      </section>
 
       {isEditingStructure ? (
         <section className="overflow-hidden rounded-2xl border border-indigo-200 bg-white shadow-sm">
@@ -949,17 +1142,23 @@ interface NewDatasetFormProps {
     title: string;
     description: string;
     type: StatisticCategory['type'];
+    dataCategory: StatisticDataCategory;
+    thumbnail: string;
   };
   onChange: React.Dispatch<
     React.SetStateAction<{
       title: string;
       description: string;
       type: StatisticCategory['type'];
+      dataCategory: StatisticDataCategory;
+      thumbnail: string;
     }>
   >;
   onSubmit: (event: React.FormEvent) => void;
   onCancel: () => void;
   saving: boolean;
+  processingThumbnail: boolean;
+  onThumbnailFile: (file: File) => void;
 }
 
 function NewDatasetForm({
@@ -968,7 +1167,11 @@ function NewDatasetForm({
   onSubmit,
   onCancel,
   saving,
+  processingThumbnail,
+  onThumbnailFile,
 }: NewDatasetFormProps) {
+  const busy = saving || processingThumbnail;
+
   return (
     <form
       onSubmit={onSubmit}
@@ -986,15 +1189,17 @@ function NewDatasetForm({
         </div>
         <button
           type="button"
+          disabled={busy}
           onClick={onCancel}
-          className="rounded-lg p-2 text-indigo-500 hover:bg-indigo-100"
+          className="rounded-lg p-2 text-indigo-500 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-50"
         >
           <X className="h-4 w-4" />
         </button>
       </div>
-      <div className="grid gap-3 md:grid-cols-3">
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
         <input
           required
+          disabled={busy}
           value={value.title}
           onChange={(event) =>
             onChange((current) => ({
@@ -1003,9 +1208,10 @@ function NewDatasetForm({
             }))
           }
           placeholder="Judul dataset"
-          className="rounded-xl border border-indigo-200 bg-white px-3.5 py-2.5 text-xs outline-none focus:border-indigo-500"
+          className="rounded-xl border border-indigo-200 bg-white px-3.5 py-2.5 text-xs outline-none focus:border-indigo-500 disabled:cursor-not-allowed disabled:opacity-60"
         />
         <input
+          disabled={busy}
           value={value.description}
           onChange={(event) =>
             onChange((current) => ({
@@ -1014,28 +1220,92 @@ function NewDatasetForm({
             }))
           }
           placeholder="Deskripsi singkat"
-          className="rounded-xl border border-indigo-200 bg-white px-3.5 py-2.5 text-xs outline-none focus:border-indigo-500"
+          className="rounded-xl border border-indigo-200 bg-white px-3.5 py-2.5 text-xs outline-none focus:border-indigo-500 disabled:cursor-not-allowed disabled:opacity-60"
         />
         <select
           value={value.type}
+          disabled={busy}
           onChange={(event) =>
             onChange((current) => ({
               ...current,
               type: event.target.value as StatisticCategory['type'],
             }))
           }
-          className="rounded-xl border border-indigo-200 bg-white px-3.5 py-2.5 text-xs font-bold outline-none focus:border-indigo-500"
+          className="rounded-xl border border-indigo-200 bg-white px-3.5 py-2.5 text-xs font-bold outline-none focus:border-indigo-500 disabled:cursor-not-allowed disabled:opacity-60"
         >
           <option value="bar">Grafik Batang</option>
           <option value="line">Grafik Garis</option>
           <option value="pie">Grafik Lingkaran</option>
           <option value="donut">Grafik Donat</option>
         </select>
+        <select
+          value={value.dataCategory}
+          disabled={busy}
+          onChange={(event) =>
+            onChange((current) => ({
+              ...current,
+              dataCategory: event.target.value as StatisticDataCategory,
+            }))
+          }
+          className="rounded-xl border border-indigo-200 bg-white px-3.5 py-2.5 text-xs font-bold outline-none focus:border-indigo-500 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {STATISTIC_DATA_CATEGORY_OPTIONS.map((option) => (
+            <option key={option.value} value={option.value}>
+              Kategori: {option.label}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div className="mt-4 grid gap-3 rounded-xl border border-indigo-100 bg-white p-3 sm:grid-cols-[120px_1fr] sm:items-center">
+        <div className="h-20 overflow-hidden rounded-lg border border-indigo-100 bg-indigo-50">
+          {value.thumbnail ? (
+            <img
+              src={value.thumbnail}
+              alt="Pratinjau thumbnail dataset"
+              className="h-full w-full object-cover"
+            />
+          ) : (
+            <ImageIcon className="m-auto h-full w-7 text-indigo-300" />
+          )}
+        </div>
+        <div>
+          <input
+            id="new-statistic-thumbnail"
+            type="file"
+            accept="image/*"
+            disabled={processingThumbnail || saving}
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file) onThumbnailFile(file);
+              event.currentTarget.value = '';
+            }}
+            className="hidden"
+          />
+          <label
+            htmlFor="new-statistic-thumbnail"
+            aria-disabled={busy}
+            className={`inline-flex w-full items-center justify-center gap-2 rounded-xl border border-indigo-200 bg-indigo-50 px-3.5 py-2.5 text-xs font-bold text-indigo-700 ${
+              busy
+                ? 'cursor-not-allowed opacity-60'
+                : 'cursor-pointer hover:bg-indigo-100'
+            }`}
+          >
+            {processingThumbnail ? (
+              <LoaderCircle className="h-4 w-4 animate-spin" />
+            ) : (
+              <Upload className="h-4 w-4" />
+            )}
+            {processingThumbnail ? 'Mengonversi thumbnail...' : 'Pilih Thumbnail Dataset'}
+          </label>
+          <p className="mt-1.5 text-[10px] leading-relaxed text-indigo-500">
+            Gambar dikonversi ke WebP maksimal 500 KB dan disimpan di Supabase Storage.
+          </p>
+        </div>
       </div>
       <div className="mt-4 flex justify-end">
         <button
           type="submit"
-          disabled={saving}
+          disabled={saving || processingThumbnail || !value.thumbnail}
           className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2.5 text-xs font-bold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
         >
           <Save className="h-4 w-4" />

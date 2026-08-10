@@ -12,6 +12,7 @@ const countEntityImages = (content) => {
     content?.profile?.headPhotoUrl,
     content?.profile?.organizationStructureUrl,
     ...(content?.profile?.staff || []).map((staff) => staff.photoUrl),
+    ...(content?.statistics || []).map((category) => category.thumbnail),
     ...(content?.news || []).map((article) => article.thumbnail),
     ...(content?.gallery || []).flatMap((item) =>
       Array.isArray(item.urls) && item.urls.length ? item.urls : [item.url]),

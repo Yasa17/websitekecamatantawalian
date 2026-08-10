@@ -39,6 +39,33 @@ test('foto Base64 dimaterialisasi menjadi URL Storage tanpa duplikasi sampul alb
   assert.equal(result.updates.gallery[0].url.startsWith('data:image/'), false);
 });
 
+test('thumbnail statistik Base64 disimpan pada collection statistics', async () => {
+  const storage = createMemoryMediaStorage();
+  const result = await materializeEntityImages(
+    'desa-satu',
+    {
+      statistics: [{
+        id: 'kependudukan',
+        title: 'Kependudukan',
+        thumbnail: fakeWebPDataUrl(),
+        items: [],
+      }],
+    },
+    storage,
+  );
+
+  assert.equal(result.uploadedPaths.length, 1);
+  assert.match(
+    result.uploadedPaths[0],
+    /^entities\/desa-satu\/statistics\/[^/]+\.webp$/,
+  );
+  assert.equal(storage.ownsUrl(result.updates.statistics[0].thumbnail), true);
+  assert.equal(
+    result.updates.statistics[0].thumbnail.startsWith('data:image/'),
+    false,
+  );
+});
+
 test('foto Base64 ditolak ketika secret Storage belum dikonfigurasi', async () => {
   await assert.rejects(
     () => materializeEntityImages(
@@ -90,6 +117,47 @@ test('pembersihan media tidak dapat menghapus objek milik wilayah lain', async (
     { news: [] },
   );
   assert.deepEqual(deleted, []);
+});
+
+test('thumbnail statistik lama dibersihkan saat diganti lalu dataset dihapus', async () => {
+  const deleted = [];
+  const storage = {
+    getObjectPath: (url) => url.replace('https://storage.test/', ''),
+    ownsPath: (path, owner) => path.startsWith(`${owner.ownerType}/${owner.ownerId}/`),
+    deletePaths: async (paths) => deleted.push(...paths),
+  };
+  await deleteRemovedEntityImages(
+    storage,
+    'desa-satu',
+    {
+      statistics: [{
+        id: 'kependudukan',
+        thumbnail: 'https://storage.test/entities/desa-satu/statistics/lama.webp',
+      }],
+    },
+    {
+      statistics: [{
+        id: 'kependudukan',
+        thumbnail: 'https://storage.test/entities/desa-satu/statistics/baru.webp',
+      }],
+    },
+  );
+  await deleteRemovedEntityImages(
+    storage,
+    'desa-satu',
+    {
+      statistics: [{
+        id: 'kependudukan',
+        thumbnail: 'https://storage.test/entities/desa-satu/statistics/baru.webp',
+      }],
+    },
+    { statistics: [] },
+  );
+
+  assert.deepEqual(deleted, [
+    'entities/desa-satu/statistics/lama.webp',
+    'entities/desa-satu/statistics/baru.webp',
+  ]);
 });
 
 test('upload yang sudah berhasil dibersihkan bila foto berikutnya gagal', async () => {

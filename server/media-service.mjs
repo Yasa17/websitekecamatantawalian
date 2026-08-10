@@ -82,6 +82,27 @@ export const materializeEntityImages = async (entityId, updates, storage, cache)
       result.profile = profile;
     }
 
+    if (Array.isArray(updates.statistics)) {
+      const statistics = [];
+      for (const category of updates.statistics) {
+        if (category.thumbnail === undefined) {
+          statistics.push({ ...category });
+          continue;
+        }
+        statistics.push({
+          ...category,
+          thumbnail: await replaceImage(
+            category.thumbnail,
+            storage,
+            location('statistics'),
+            uploadedPaths,
+            uploadCache,
+          ),
+        });
+      }
+      result.statistics = statistics;
+    }
+
     if (Array.isArray(updates.news)) {
       const articles = [];
       for (const article of updates.news) {
@@ -148,6 +169,7 @@ export const collectEntityImageUrls = (content) => {
   add(profile?.headPhotoUrl);
   add(profile?.organizationStructureUrl);
   for (const staff of profile?.staff || []) add(staff.photoUrl);
+  for (const category of content?.statistics || []) add(category.thumbnail);
   for (const article of content?.news || []) add(article.thumbnail);
   for (const item of content?.gallery || []) {
     const galleryUrls = Array.isArray(item.urls) && item.urls.length

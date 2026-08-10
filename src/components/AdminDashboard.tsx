@@ -27,6 +27,13 @@ import {
 } from 'lucide-react';
 import { VillageProfile, StatisticCategory, News, GalleryItem, AdminProfile } from '../types';
 import { formatImageSize, processImageToWebP, type ProcessedImage } from '../utils/imageUpload';
+import {
+  formatNewsDate,
+  isNewsReleased,
+  isValidIsoCalendarDate,
+  localIsoDate,
+  sortNewsNewestFirst,
+} from '../utils/newsDate';
 import { DistrictDataRecap, type DistrictEntitySummary } from './DistrictSummary';
 import StatisticTableManager from './StatisticTableManager';
 import ContactSettingsEditor from './ContactSettingsEditor';
@@ -79,6 +86,7 @@ export default function AdminDashboard({
     category: 'Umum',
     thumbnail: '',
     status: 'Published' as 'Published' | 'Draft',
+    datePublished: localIsoDate(),
   });
 
   // GALLERY States & Multi-Photo modes
@@ -299,8 +307,8 @@ export default function AdminDashboard({
   // 2. NEWS CRUD
   const handleSaveNews = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newsForm.title.trim() || !newsForm.content.trim() || !newsForm.thumbnail) {
-      showToast('Judul, isi berita, dan thumbnail wajib diisi.', 'info');
+    if (!newsForm.title.trim() || !newsForm.content.trim() || !newsForm.thumbnail || !newsForm.datePublished) {
+      showToast('Judul, isi berita, thumbnail, dan tanggal rilis wajib diisi.', 'info');
       return;
     }
     if (savingOperation) return;
@@ -317,7 +325,7 @@ export default function AdminDashboard({
                 category: newsForm.category,
                 thumbnail: newsForm.thumbnail,
                 status: newsForm.status,
-                datePublished: item.datePublished || new Date().toISOString().split('T')[0],
+                datePublished: newsForm.datePublished,
               }
             : item
         );
@@ -334,12 +342,18 @@ export default function AdminDashboard({
           category: newsForm.category,
           thumbnail: newsForm.thumbnail,
           status: newsForm.status,
-          datePublished: new Date().toISOString().split('T')[0],
+          datePublished: newsForm.datePublished,
         };
         const success = await setNews([newArticle, ...news]);
         if (!success) return;
         setIsAddingNews(false);
-        showToast('Berita baru berhasil dipublikasikan!');
+        showToast(
+          newsForm.status === 'Draft'
+            ? 'Berita baru berhasil disimpan sebagai draft.'
+            : isNewsReleased(newArticle)
+              ? 'Berita baru berhasil diterbitkan!'
+              : `Berita berhasil dijadwalkan untuk ${formatNewsDate(newArticle.datePublished)}.`,
+        );
       }
 
       setNewsForm({
@@ -348,6 +362,7 @@ export default function AdminDashboard({
         category: 'Umum',
         thumbnail: '',
         status: 'Published',
+        datePublished: localIsoDate(),
       });
     } finally {
       setSavingOperation(null);
@@ -362,6 +377,9 @@ export default function AdminDashboard({
       category: item.category,
       thumbnail: item.thumbnail,
       status: item.status,
+      datePublished: isValidIsoCalendarDate(item.datePublished)
+        ? item.datePublished
+        : localIsoDate(),
     });
     setIsAddingNews(true);
   };
@@ -622,7 +640,7 @@ export default function AdminDashboard({
                 <span className="text-[10px] uppercase font-bold text-gray-400">Total Warta Berita</span>
                 <p className="text-3xl font-black text-gray-900 mt-1">{news.length}</p>
                 <p className="text-[10px] text-teal-600 font-semibold mt-1">
-                  Published: {news.filter(n => n.status === 'Published').length} | Draft: {news.filter(n => n.status === 'Draft').length}
+                  Tayang: {news.filter((item) => isNewsReleased(item)).length} | Terjadwal: {news.filter((item) => item.status === 'Published' && !isNewsReleased(item)).length} | Draft: {news.filter((item) => item.status === 'Draft').length}
                 </p>
               </div>
 
@@ -1027,7 +1045,14 @@ export default function AdminDashboard({
                   id="add-news-btn"
                   onClick={() => {
                     setEditingNews(null);
-                    setNewsForm({ title: '', content: '', category: 'Pemerintahan', thumbnail: '', status: 'Published' });
+                    setNewsForm({
+                      title: '',
+                      content: '',
+                      category: 'Pemerintahan',
+                      thumbnail: '',
+                      status: 'Published',
+                      datePublished: localIsoDate(),
+                    });
                     setIsAddingNews(true);
                   }}
                   className="px-4 py-2 bg-gradient-to-r from-teal-700 to-teal-800 text-white rounded-lg text-xs font-bold flex items-center space-x-1 shadow active:scale-95 cursor-pointer"
@@ -1058,7 +1083,7 @@ export default function AdminDashboard({
                   />
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
                   <div className="space-y-1.5">
                     <label className="text-xs font-bold text-gray-600 uppercase">Rubrik Kategori</label>
                     <select
@@ -1076,6 +1101,20 @@ export default function AdminDashboard({
                   </div>
 
                   <div className="space-y-1.5">
+                    <label className="text-xs font-bold text-gray-600 uppercase">Tanggal Rilis</label>
+                    <input
+                      type="date"
+                      value={newsForm.datePublished}
+                      onChange={(e) => setNewsForm({ ...newsForm, datePublished: e.target.value })}
+                      required
+                      className="w-full px-4 py-2 bg-white border border-gray-200 rounded-lg text-xs focus:outline-none text-gray-700 font-semibold"
+                    />
+                    <p className="text-[10px] leading-relaxed text-gray-400">
+                      Tanggal mendatang akan ditampilkan otomatis saat tanggal rilis tiba.
+                    </p>
+                  </div>
+
+                  <div className="space-y-1.5">
                     <label className="text-xs font-bold text-gray-600 uppercase">Status Rilis</label>
                     <select
                       value={newsForm.status}
@@ -1083,7 +1122,7 @@ export default function AdminDashboard({
                       required
                       className="w-full px-4 py-2 bg-white border border-gray-200 rounded-lg text-xs focus:outline-none text-gray-700 font-semibold"
                     >
-                      <option value="Published">Published (Situs Publik)</option>
+                      <option value="Published">Published (Tayang / Terjadwal)</option>
                       <option value="Draft">Draft (Arsip Internal)</option>
                     </select>
                   </div>
@@ -1138,7 +1177,7 @@ export default function AdminDashboard({
                     <span>
                       {savingOperation === 'news'
                         ? 'Menyimpan...'
-                        : editingNews ? 'Perbarui Rilis' : 'Terbitkan Berita'}
+                        : editingNews ? 'Perbarui Berita' : 'Simpan Berita'}
                     </span>
                   </button>
                   <button
@@ -1164,12 +1203,18 @@ export default function AdminDashboard({
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-150 block max-h-[360px] overflow-y-auto">
-                    {news.map((item, index) => (
+                    {sortNewsNewestFirst(news).map((item, index) => (
                       <tr key={item.id} className="hover:bg-gray-50 transition-colors flex items-center">
                         <td className="p-3 w-16 font-semibold font-mono text-gray-450">{index + 1}</td>
                         <td className="p-3 flex-1">
                           <p className="font-extrabold text-gray-900 leading-snug line-clamp-1">{item.title}</p>
-                          <p className="text-[10px] text-gray-400 font-medium font-mono mt-0.5">{item.datePublished}</p>
+                          <p className="text-[10px] text-gray-400 font-medium font-mono mt-0.5">
+                            {formatNewsDate(item.datePublished, {
+                              year: 'numeric',
+                              month: 'short',
+                              day: 'numeric',
+                            })}
+                          </p>
                         </td>
                         <td className="p-3 w-32 text-center font-bold text-gray-600">
                           <span className="text-[10px] bg-slate-100 text-slate-700 px-2 py-0.5 rounded font-mono">
@@ -1178,9 +1223,13 @@ export default function AdminDashboard({
                         </td>
                         <td className="p-3 w-28 text-center">
                           <span className={`text-[10px] font-bold px-2 py-0.5 rounded uppercase font-mono ${
-                            item.status === 'Published' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
+                            item.status === 'Draft'
+                              ? 'bg-amber-100 text-amber-800'
+                              : isNewsReleased(item)
+                                ? 'bg-emerald-100 text-emerald-800'
+                                : 'bg-indigo-100 text-indigo-800'
                           }`}>
-                            {item.status}
+                            {item.status === 'Draft' ? 'Draft' : isNewsReleased(item) ? 'Tayang' : 'Terjadwal'}
                           </span>
                         </td>
                         <td className="p-3 w-28 text-center flex items-center justify-center space-x-2">

@@ -18,6 +18,7 @@ import KontakView from './components/KontakView';
 import AdminDashboard from './components/AdminDashboard';
 import AdminLoginPage from './components/AdminLoginPage';
 import type { DistrictEntitySummary } from './components/DistrictSummary';
+import { localIsoDate } from './utils/newsDate';
 
 const ACTIVE_ENTITY_STORAGE_KEY = 'tawalian_active_entity_id_v3';
 const DEFAULT_ENTITY_ID = 'kecamatan-tawalian';
@@ -42,6 +43,7 @@ export default function App() {
   const [selectedNews, setSelectedNews] = useState<News | null>(null);
   const entityMutationQueues = useRef(new Map<string, Promise<void>>());
   const entityMutationRevisions = useRef(new Map<string, number>());
+  const portalCalendarDay = useRef(localIsoDate());
 
   const activeEntity = useMemo(
     () =>
@@ -83,6 +85,20 @@ export default function App() {
     return () => {
       mounted = false;
     };
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      const today = localIsoDate();
+      if (!today || today === portalCalendarDay.current) return;
+      portalCalendarDay.current = today;
+      void apiRequest<{ data: PortalData }>('/api/portal')
+        .then((response) => setPortalData(response.data))
+        .catch((error) => {
+          console.error('Jadwal berita gagal dimuat ulang:', error);
+        });
+    }, 60_000);
+    return () => window.clearInterval(timer);
   }, []);
 
   useEffect(() => {
@@ -245,6 +261,8 @@ export default function App() {
         },
       );
       setApiToken(response.token);
+      const freshPortal = await apiRequest<{ data: PortalData }>('/api/portal');
+      setPortalData(freshPortal.data);
       setCurrentAdmin(response.admin);
       if (response.admin.role === 'super_admin') await loadDistrictSummary();
       if (response.admin.assignedEntityId) {
@@ -254,6 +272,7 @@ export default function App() {
       return true;
     } catch (error) {
       clearApiToken();
+      setCurrentAdmin(null);
       if (error instanceof ApiError && error.status === 401) return false;
       throw error;
     }
@@ -283,6 +302,11 @@ export default function App() {
     setCurrentAdmin(null);
     setDistrictEntities([]);
     setAppView('login');
+    void apiRequest<{ data: PortalData }>('/api/portal')
+      .then((response) => setPortalData(response.data))
+      .catch((error) => {
+        console.error('Data publik gagal dimuat ulang setelah logout:', error);
+      });
   };
 
   if (appView === 'login') {

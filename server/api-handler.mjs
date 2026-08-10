@@ -127,6 +127,104 @@ const validateImage = (url) => {
   }
 };
 
+const isValidIsoCalendarDate = (value) => {
+  if (typeof value !== 'string') return false;
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) return false;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(0);
+  date.setUTCFullYear(year, month - 1, day);
+  date.setUTCHours(0, 0, 0, 0);
+  return year >= 1 &&
+    date.getUTCFullYear() === year &&
+    date.getUTCMonth() === month - 1 &&
+    date.getUTCDate() === day;
+};
+
+const makassarDateFormatter = new Intl.DateTimeFormat(
+  'en-US-u-ca-gregory-nu-latn',
+  {
+    timeZone: 'Asia/Makassar',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  },
+);
+
+const currentMakassarDate = () => {
+  const parts = Object.fromEntries(
+    makassarDateFormatter
+      .formatToParts(new Date())
+      .filter((part) => ['year', 'month', 'day'].includes(part.type))
+      .map((part) => [part.type, part.value]),
+  );
+  return `${parts.year}-${parts.month}-${parts.day}`;
+};
+
+const filterPortalNews = (portalData, admin) => {
+  const today = currentMakassarDate();
+  return {
+    ...portalData,
+    entities: portalData.entities.map((entity) => {
+      if (admin?.assignedEntityId === entity.id) return entity;
+      const news = Array.isArray(entity.content?.news) ? entity.content.news : [];
+      return {
+        ...entity,
+        content: {
+          ...entity.content,
+          news: news.filter((article) => {
+            if (article?.status !== 'Published') return false;
+            return !isValidIsoCalendarDate(article.datePublished) ||
+              article.datePublished <= today;
+          }),
+        },
+      };
+    }),
+  };
+};
+
+const validateNews = (news) => {
+  if (!Array.isArray(news)) {
+    throw validationError('Data berita harus berupa daftar.');
+  }
+  if (news.length > 500) {
+    throw validationError('Jumlah berita maksimal 500 artikel per wilayah.');
+  }
+  const ids = new Set();
+  for (const article of news) {
+    if (
+      !article ||
+      typeof article.id !== 'string' ||
+      !article.id ||
+      ids.has(article.id)
+    ) {
+      throw validationError('Setiap berita wajib memiliki ID yang unik.');
+    }
+    ids.add(article.id);
+    if (typeof article.title !== 'string' || !article.title.trim() || article.title.length > 300) {
+      throw validationError('Judul berita wajib diisi dan maksimal 300 karakter.');
+    }
+    if (typeof article.content !== 'string' || !article.content.trim() || article.content.length > 50000) {
+      throw validationError(`Isi berita "${article.title}" wajib diisi dan maksimal 50.000 karakter.`);
+    }
+    if (typeof article.category !== 'string' || !article.category.trim() || article.category.length > 100) {
+      throw validationError(`Kategori berita "${article.title}" tidak valid.`);
+    }
+    if (!['Published', 'Draft'].includes(article.status)) {
+      throw validationError(`Status berita "${article.title}" tidak valid.`);
+    }
+    if (
+      article.datePublished !== undefined &&
+      article.datePublished !== '' &&
+      !isValidIsoCalendarDate(article.datePublished)
+    ) {
+      throw validationError(`Tanggal rilis berita "${article.title}" harus berformat YYYY-MM-DD.`);
+    }
+  }
+};
+
 const validateGallery = (gallery) => {
   if (!Array.isArray(gallery)) {
     throw validationError('Data galeri harus berupa daftar album.');
@@ -156,9 +254,6 @@ const validateContentImages = (updates) => {
     }
   }
   if (updates.news !== undefined) {
-    if (!Array.isArray(updates.news)) {
-      throw validationError('Data berita harus berupa daftar.');
-    }
     for (const article of updates.news) validateImage(article.thumbnail);
   }
 };
@@ -215,6 +310,17 @@ const validateStatistics = (statistics) => {
   }
 
   const categoryIds = new Set();
+  const dataCategories = new Set([
+    'demografi',
+    'pendidikan',
+    'ekonomi',
+    'pertanian',
+    'kesehatan',
+    'infrastruktur',
+    'sosial-budaya',
+    'pemerintahan',
+    'lainnya',
+  ]);
   for (const category of statistics) {
     if (
       !category ||
@@ -229,6 +335,22 @@ const validateStatistics = (statistics) => {
       throw validationError(`ID dataset statistik "${category.id}" digunakan lebih dari sekali.`);
     }
     categoryIds.add(category.id);
+    if (category.title.length > 200) {
+      throw validationError('Judul dataset statistik maksimal 200 karakter.');
+    }
+    if (
+      category.description !== undefined &&
+      (typeof category.description !== 'string' || category.description.length > 2000)
+    ) {
+      throw validationError(`Deskripsi dataset "${category.title}" tidak valid.`);
+    }
+    if (
+      category.dataCategory !== undefined &&
+      !dataCategories.has(category.dataCategory)
+    ) {
+      throw validationError(`Kategori data dataset "${category.title}" tidak valid.`);
+    }
+    if (category.thumbnail !== undefined) validateImage(category.thumbnail);
     if (
       category.type !== undefined &&
       !['bar', 'line', 'pie', 'donut'].includes(category.type)
@@ -367,6 +489,11 @@ const requireSession = async (authorization, roles) => {
   return { admin, tokenHash };
 };
 
+const findOptionalPortalAdmin = async (authorization) => {
+  const token = authorization.startsWith('Bearer ') ? authorization.slice(7) : '';
+  return token ? findAdminBySession(hashSessionToken(token)) : null;
+};
+
 const dispatch = async ({
   method,
   pathname,
@@ -396,7 +523,9 @@ const dispatch = async ({
         code: 'NOT_INITIALIZED',
       }, 503);
     }
-    return apiResult({ data: await getPortalData() });
+    const portalData = await getPortalData();
+    const admin = await findOptionalPortalAdmin(authorization);
+    return apiResult({ data: filterPortalNews(portalData, admin) });
   }
 
   if (requestMethod === 'POST' && staticPath === '/api/citizen-submissions') {
@@ -512,6 +641,7 @@ const dispatch = async ({
       }, 403);
     }
     if (updates.statistics !== undefined) validateStatistics(updates.statistics);
+    if (updates.news !== undefined) validateNews(updates.news);
     if (updates.gallery !== undefined) validateGallery(updates.gallery);
     if (updates.profile !== undefined) validateContactProfile(updates.profile);
     validateContentImages(updates);

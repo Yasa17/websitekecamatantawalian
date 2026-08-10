@@ -18,7 +18,7 @@
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
     "test:server": "node --test server/index.test.mjs server/database.test.mjs server/media-storage.test.mjs",
-    "test:statistics": "node --import tsx --test src/utils/statisticTable.test.ts src/utils/statisticPresentation.test.ts",
+    "test:statistics": "node --import ./test/setup-node-environment.mjs --import tsx --test src/utils/statisticTable.test.ts src/utils/statisticPresentation.test.ts src/utils/statisticMetadata.test.ts src/utils/newsDate.test.ts",
     "test:cloudflare": "wrangler pages functions build functions --outdir .wrangler/pages-functions --output-routes-path .wrangler/_routes.json --compatibility-date 2026-07-12 --compatibility-flag nodejs_compat"
   },
   "dependencies": {

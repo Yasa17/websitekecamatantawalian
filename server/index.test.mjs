@@ -62,6 +62,44 @@ test('backend menyimpan data dan membatasi hak akses berdasarkan peran', async (
       items: [{ id: 'penduduk', label: 'Jumlah Penduduk', value: 120 }],
     },
   ];
+  const visibilityNews = [
+    {
+      id: 'berita-rilis',
+      title: 'Berita Sudah Rilis',
+      content: 'Berita ini dapat dibaca oleh masyarakat.',
+      category: 'Pemerintahan',
+      thumbnail: 'https://images.example/berita-rilis.webp',
+      status: 'Published',
+      datePublished: '2020-01-01',
+    },
+    {
+      id: 'berita-draft',
+      title: 'Berita Draft',
+      content: 'Berita ini hanya boleh dilihat admin wilayahnya.',
+      category: 'Pemerintahan',
+      thumbnail: 'https://images.example/berita-draft.webp',
+      status: 'Draft',
+      datePublished: '2020-01-01',
+    },
+    {
+      id: 'berita-masa-depan',
+      title: 'Berita Terjadwal',
+      content: 'Berita ini belum boleh tampil kepada masyarakat.',
+      category: 'Pemerintahan',
+      thumbnail: 'https://images.example/berita-masa-depan.webp',
+      status: 'Published',
+      datePublished: '9999-12-31',
+    },
+    {
+      id: 'berita-legacy',
+      title: 'Berita Legacy',
+      content: 'Berita lama tanpa tanggal ISO tetap ditampilkan.',
+      category: 'Pemerintahan',
+      thumbnail: 'https://images.example/berita-legacy.webp',
+      status: 'Published',
+      datePublished: 'tanggal-belum-tercatat',
+    },
+  ];
   const gallery = [
     {
       id: 'foto-1',
@@ -71,7 +109,7 @@ test('backend menyimpan data dan membatasi hak akses berdasarkan peran', async (
       dateAdded: '2026-07-29',
     },
   ];
-  const content = { profile: {}, news: [], statistics, gallery };
+  const content = { profile: {}, news: visibilityNews, statistics, gallery };
   const bootstrap = await request('/api/bootstrap', {
     method: 'POST',
     body: JSON.stringify({
@@ -117,6 +155,15 @@ test('backend menyimpan data dan membatasi hak akses berdasarkan peran', async (
   });
   assert.equal(bootstrap.response.status, 201);
 
+  const publicPortal = await request('/api/portal');
+  assert.equal(publicPortal.response.status, 200);
+  for (const entity of publicPortal.body.data.entities) {
+    assert.deepEqual(
+      entity.content.news.map((article) => article.id),
+      ['berita-rilis', 'berita-legacy'],
+    );
+  }
+
   const districtLogin = await request('/api/auth/login', {
     method: 'POST',
     body: JSON.stringify({ usernameOrEmail: 'admin', password: 'admin' }),
@@ -125,6 +172,25 @@ test('backend menyimpan data dan membatasi hak akses berdasarkan peran', async (
   const districtHeaders = {
     Authorization: `Bearer ${districtLogin.body.token}`,
   };
+
+  const districtPortal = await request('/api/portal', {
+    headers: districtHeaders,
+  });
+  assert.equal(districtPortal.response.status, 200);
+  const assignedDistrict = districtPortal.body.data.entities.find(
+    (entity) => entity.id === 'kecamatan-tawalian',
+  );
+  const otherVillage = districtPortal.body.data.entities.find(
+    (entity) => entity.id === 'desa-satu',
+  );
+  assert.deepEqual(
+    assignedDistrict.content.news.map((article) => article.id),
+    visibilityNews.map((article) => article.id),
+  );
+  assert.deepEqual(
+    otherVillage.content.news.map((article) => article.id),
+    ['berita-rilis', 'berita-legacy'],
+  );
 
   const summary = await request('/api/district/summary', {
     headers: districtHeaders,
@@ -148,12 +214,35 @@ test('backend menyimpan data dan membatasi hak akses berdasarkan peran', async (
         news: [{
           id: 'berita-kecamatan',
           title: 'Kegiatan Kecamatan',
+          content: 'Kegiatan pelayanan dan pembangunan Kecamatan Tawalian.',
+          category: 'Pemerintahan',
           thumbnail: 'https://images.example/berita-kecamatan.webp',
+          status: 'Published',
+          datePublished: '2026-08-10',
         }],
       },
     }),
   });
   assert.equal(districtNewsWrite.response.status, 200);
+
+  const invalidNewsDate = await request('/api/entities/kecamatan-tawalian/content', {
+    method: 'PATCH',
+    headers: districtHeaders,
+    body: JSON.stringify({
+      updates: {
+        news: [{
+          id: 'berita-tanggal-invalid',
+          title: 'Berita dengan Tanggal Tidak Valid',
+          content: 'Isi berita tetap valid agar pengujian berfokus pada tanggal rilis.',
+          category: 'Pemerintahan',
+          thumbnail: 'https://images.example/berita-tanggal-invalid.webp',
+          status: 'Published',
+          datePublished: '2026-02-30',
+        }],
+      },
+    }),
+  });
+  assert.equal(invalidNewsDate.response.status, 400);
 
   const districtGalleryWrite = await request('/api/entities/kecamatan-tawalian/content', {
     method: 'PATCH',
@@ -485,6 +574,47 @@ test('backend menyimpan data dan membatasi hak akses berdasarkan peran', async (
     false,
   );
 
+  const statisticMetadataWrite = await request('/api/entities/desa-satu/content', {
+    method: 'PATCH',
+    headers: villageHeaders,
+    body: JSON.stringify({
+      updates: {
+        statistics: [{
+          id: 'kependudukan-thumbnail',
+          title: 'Kependudukan dengan Thumbnail',
+          description: 'Dataset pengujian metadata kategori dan thumbnail.',
+          dataCategory: 'demografi',
+          type: 'bar',
+          thumbnail: smallWebpData,
+          items: [{ id: 'penduduk', label: 'Jumlah Penduduk', value: 145 }],
+        }],
+      },
+    }),
+  });
+  assert.equal(statisticMetadataWrite.response.status, 200);
+  assert.equal(
+    statisticMetadataWrite.body.data.statistics[0].dataCategory,
+    'demografi',
+  );
+  assert.match(
+    statisticMetadataWrite.body.data.statistics[0].thumbnail,
+    /^https:\/\/storage\.example\.test\/storage\/v1\/object\/public\/portal-media\//,
+  );
+
+  const invalidStatisticDataCategory = await request('/api/entities/desa-satu/content', {
+    method: 'PATCH',
+    headers: villageHeaders,
+    body: JSON.stringify({
+      updates: {
+        statistics: [{
+          ...statisticMetadataWrite.body.data.statistics[0],
+          dataCategory: 'kategori-tidak-valid',
+        }],
+      },
+    }),
+  });
+  assert.equal(invalidStatisticDataCategory.response.status, 400);
+
   const otherSmallImageUploads = await request('/api/entities/desa-satu/content', {
     method: 'PATCH',
     headers: villageHeaders,
@@ -498,7 +628,11 @@ test('backend menyimpan data dan membatasi hak akses berdasarkan peran', async (
         news: [{
           id: 'berita-desa',
           title: 'Berita Desa',
+          content: 'Informasi terbaru kegiatan pelayanan di Desa Satu.',
+          category: 'Pemerintahan',
           thumbnail: smallWebpData,
+          status: 'Draft',
+          datePublished: '',
         }],
       },
     }),

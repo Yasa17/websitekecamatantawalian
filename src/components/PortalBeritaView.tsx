@@ -3,9 +3,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Search, Calendar, User, ArrowLeft, ArrowRight, Share2, Tag, BookOpen, AlertCircle } from 'lucide-react';
 import { News } from '../types';
+import { formatNewsDate, isNewsReleased, sortNewsNewestFirst } from '../utils/newsDate';
 
 interface PortalBeritaViewProps {
   news: News[];
@@ -22,7 +23,16 @@ export default function PortalBeritaView({
   const [selectedCategory, setSelectedCategory] = useState<string>('Semua');
 
   // Filter news only for Published articles
-  const publishedNews = news.filter((n) => n.status === 'Published');
+  const publishedNews = sortNewsNewestFirst(
+    news.filter((item) => item.status === 'Published' && isNewsReleased(item)),
+  );
+  const activeSelectedNews = selectedNews
+    ? publishedNews.find((item) => item.id === selectedNews.id) || null
+    : null;
+
+  useEffect(() => {
+    if (selectedNews && !activeSelectedNews) setSelectedNews(null);
+  }, [activeSelectedNews, selectedNews, setSelectedNews]);
 
   const categories = ['Semua', 'Pemerintahan', 'Ekonomi', 'Infrastruktur', 'Pendidikan', 'Umum'];
 
@@ -36,7 +46,7 @@ export default function PortalBeritaView({
   });
 
   // Render Single News Article Details Reader Grid
-  if (selectedNews) {
+  if (activeSelectedNews) {
     return (
       <div id="read-news-detail" className="space-y-6 animate-fadeIn">
         <button
@@ -52,17 +62,17 @@ export default function PortalBeritaView({
           {/* Cover Header Banner */}
           <div className="h-[280px] md:h-[400px] w-full bg-gray-50 relative">
             <img
-              src={selectedNews.thumbnail}
-              alt={selectedNews.title}
+              src={activeSelectedNews.thumbnail}
+              alt={activeSelectedNews.title}
               className="w-full h-full object-cover"
               referrerPolicy="no-referrer"
             />
             <div className="absolute inset-0 bg-gradient-to-t from-teal-950/80 via-transparent to-transparent" />
             <div className="absolute bottom-6 left-6 right-6 text-white space-y-2">
               <span className="px-3 py-1 bg-teal-600 text-white rounded-full text-xs font-bold uppercase tracking-wider">
-                {selectedNews.category}
+                {activeSelectedNews.category}
               </span>
-              <h1 className="text-xl md:text-3xl font-black">{selectedNews.title}</h1>
+              <h1 className="text-xl md:text-3xl font-black">{activeSelectedNews.title}</h1>
             </div>
           </div>
 
@@ -73,7 +83,7 @@ export default function PortalBeritaView({
               <span className="flex items-center space-x-1">
                 <Calendar className="h-4 w-4 text-teal-600" />
                 <span>
-                  {new Date(selectedNews.datePublished).toLocaleDateString('id-ID', {
+                  {formatNewsDate(activeSelectedNews.datePublished, {
                     weekday: 'long',
                     year: 'numeric',
                     month: 'long',
@@ -89,13 +99,13 @@ export default function PortalBeritaView({
               <span className="h-4 w-px bg-gray-200" />
               <span className="flex items-center space-x-1">
                 <Tag className="h-4 w-4 text-teal-600" />
-                <span>{selectedNews.category}</span>
+                <span>{activeSelectedNews.category}</span>
               </span>
             </div>
 
             {/* Paragraph Text renderer */}
             <div className="prose max-w-none text-gray-750 leading-relaxed text-sm md:text-md space-y-5 text-justify">
-              {selectedNews.content.split('\n\n').map((paragraph, index) => (
+              {activeSelectedNews.content.split('\n\n').map((paragraph, index) => (
                 <p key={index}>{paragraph}</p>
               ))}
             </div>
@@ -103,12 +113,12 @@ export default function PortalBeritaView({
             {/* Footer details */}
             <div className="pt-8 border-t border-gray-150 flex flex-wrap items-center justify-between gap-4">
               <div className="text-xs text-gray-400">
-                Layanan Informasi Desa Digital • {selectedNews.id}
+                Layanan Informasi Desa Digital • {activeSelectedNews.id}
               </div>
               <button
                 id="share-fake-news"
                 onClick={() => {
-                  alert(`Tautan berita berhasil disalin ke papan klip!\n${window.location.origin}/berita/${selectedNews.id}`);
+                  alert(`Tautan berita berhasil disalin ke papan klip!\n${window.location.origin}/berita/${activeSelectedNews.id}`);
                 }}
                 className="px-4 py-2 border border-gray-200 hover:border-teal-400 hover:bg-teal-50 text-gray-700 hover:text-teal-800 rounded-lg text-xs font-bold leading-none flex items-center space-x-1.5 transition-all cursor-pointer active:scale-95"
               >
@@ -205,7 +215,7 @@ export default function PortalBeritaView({
                   <p className="text-[10px] font-bold text-gray-400 font-mono flex items-center space-x-1">
                     <Calendar className="h-3.5 w-3.5 text-teal-600 shrink-0" />
                     <span>
-                      {new Date(item.datePublished).toLocaleDateString('id-ID', {
+                      {formatNewsDate(item.datePublished, {
                         year: 'numeric',
                         month: 'short',
                         day: 'numeric',

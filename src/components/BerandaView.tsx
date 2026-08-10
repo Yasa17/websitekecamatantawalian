@@ -6,6 +6,7 @@
 import React from 'react';
 import { Newspaper, Image as ImageIcon, MapPin, ArrowRight, TrendingUp, Users, ShieldAlert } from 'lucide-react';
 import { VillageProfile, StatisticCategory, News, GalleryItem } from '../types';
+import { formatNewsDate, isNewsReleased, sortNewsNewestFirst } from '../utils/newsDate';
 
 interface BerandaViewProps {
   villageProfile: VillageProfile;
@@ -32,7 +33,9 @@ export default function BerandaView({
   const totalWarga = genderStat
     ? genderStat.items.reduce((acc, curr) => acc + curr.value, 0)
     : null;
-  const publishedNews = news.filter((n) => n.status === 'Published');
+  const publishedNews = sortNewsNewestFirst(
+    news.filter((item) => item.status === 'Published' && isNewsReleased(item)),
+  );
   const activePhotos = gallery.length;
 
   return (
@@ -207,7 +210,7 @@ export default function BerandaView({
                 <div className="p-5 flex-grow flex flex-col justify-between space-y-4">
                   <div className="space-y-2">
                     <p className="text-[11px] font-semibold text-gray-400 font-mono">
-                      {new Date(item.datePublished).toLocaleDateString('id-ID', {
+                      {formatNewsDate(item.datePublished, {
                         year: 'numeric',
                         month: 'short',
                         day: 'numeric',

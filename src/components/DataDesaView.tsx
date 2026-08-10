@@ -40,6 +40,7 @@ import {
   downloadStatisticWorkbook,
 } from '../utils/statisticTable';
 import { getStatisticPresentation } from '../utils/statisticPresentation';
+import { resolveStatisticMetadata } from '../utils/statisticMetadata';
 
 interface DataDesaViewProps {
   statistics: StatisticCategory[];
@@ -57,33 +58,6 @@ const COLORS = [
   '#0ea5e9', // Sky
 ];
 
-const STAT_CARD_META: Record<string, { category: string; image: string; source: string; focus: string }> = {
-  kependudukan: {
-    category: 'Demografi',
-    image: 'https://images.unsplash.com/photo-1517048676732-d65bc937f952?q=80&w=800&auto=format&fit=crop',
-    source: 'Basis Data Kependudukan Desa',
-    focus: 'Komposisi warga dan rasio penduduk',
-  },
-  pendidikan: {
-    category: 'Pendidikan',
-    image: 'https://images.unsplash.com/photo-1497633762265-9d179a990aa6?q=80&w=800&auto=format&fit=crop',
-    source: 'Pendataan Profil Keluarga',
-    focus: 'Jenjang pendidikan formal warga',
-  },
-  pekerjaan: {
-    category: 'Ekonomi',
-    image: 'https://images.unsplash.com/photo-1454165804606-c3d57bc86b40?q=80&w=800&auto=format&fit=crop',
-    source: 'Rekap Mata Pencaharian',
-    focus: 'Sebaran pekerjaan dan aktivitas produktif',
-  },
-  pertanian: {
-    category: 'Pertanian',
-    image: 'https://images.unsplash.com/photo-1500382017468-9049fed747ef?q=80&w=800&auto=format&fit=crop',
-    source: 'Laporan Produksi Tahunan',
-    focus: 'Volume hasil pangan dan perkebunan',
-  },
-};
-
 export default function DataDesaView({ statistics, villageProfile }: DataDesaViewProps) {
   const [activeCategoryIndex, setActiveCategoryIndex] = useState<number>(0);
   const [selectedCategoryIndex, setSelectedCategoryIndex] = useState<number | null>(null);
@@ -95,16 +69,10 @@ export default function DataDesaView({ statistics, villageProfile }: DataDesaVie
   }, [activeCategory?.id]);
 
   const getCategoryMeta = (cat: StatisticCategory) => {
-    const metaKey = Object.keys(STAT_CARD_META).find((key) => cat.id.includes(key));
-    const baseMeta = (metaKey ? STAT_CARD_META[metaKey] : null) || {
-      category: `Statistik ${villageProfile.contentLabel || 'Wilayah'}`,
-      image: 'https://images.unsplash.com/photo-1509114397022-ed747cca3f65?q=80&w=800&auto=format&fit=crop',
-      source: `Open Data ${villageProfile.name}`,
-      focus: 'Ringkasan indikator statistik wilayah',
-    };
+    const baseMeta = resolveStatisticMetadata(cat);
     return {
       ...baseMeta,
-      source: baseMeta.source.replace(/Desa/g, villageProfile.contentLabel || 'Wilayah'),
+      source: baseMeta.source.replace(/Wilayah/g, villageProfile.contentLabel || 'Wilayah'),
     };
   };
 
@@ -302,7 +270,13 @@ export default function DataDesaView({ statistics, villageProfile }: DataDesaVie
 
       {/* 1. Header Row */}
       <div className="bg-teal-900 rounded-3xl p-8 md:p-12 text-white relative overflow-hidden shadow-md">
-        <div className="absolute inset-0 z-0 bg-cover bg-center opacity-15" style={{ backgroundImage: `url('${getCategoryMeta(activeCategory).image}')` }} />
+        <img
+          src={getCategoryMeta(activeCategory).image}
+          alt=""
+          aria-hidden="true"
+          referrerPolicy="no-referrer"
+          className="absolute inset-0 z-0 h-full w-full object-cover opacity-15"
+        />
         <div className="relative z-10 max-w-3xl space-y-3">
           <span className="text-teal-300 font-bold text-xs uppercase tracking-widest bg-teal-800/60 px-3 py-1 rounded-full border border-teal-700/50">
             {getCategoryMeta(activeCategory).category} DATA STORY

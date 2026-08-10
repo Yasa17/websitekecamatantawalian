@@ -39,12 +39,27 @@ export interface StatisticTable {
   rows: StatisticTableRow[];
 }
 
+export type StatisticDataCategory =
+  | 'demografi'
+  | 'pendidikan'
+  | 'ekonomi'
+  | 'pertanian'
+  | 'kesehatan'
+  | 'infrastruktur'
+  | 'sosial-budaya'
+  | 'pemerintahan'
+  | 'lainnya';
+
 export interface StatisticCategory {
   id: string; // e.g., 'kependudukan', 'pendidikan', 'pekerjaan', 'pertanian'
   title: string;
   description: string;
   type: 'bar' | 'line' | 'pie' | 'donut';
   items: StatisticItem[];
+  /** Kategori katalog yang dipilih admin untuk tampilan halaman publik. */
+  dataCategory?: StatisticDataCategory;
+  /** URL Supabase Storage atau WebP sementara saat sedang diunggah. */
+  thumbnail?: string;
   /**
    * Struktur tabel fleksibel untuk dataset baru. `items` tetap disimpan sebagai
    * proyeksi data numerik agar grafik dan data lama tetap kompatibel.

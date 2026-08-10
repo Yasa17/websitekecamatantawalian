@@ -72,6 +72,8 @@ export const INITIAL_STATISTICS: StatisticCategory[] = [
     id: 'kependudukan',
     title: 'Kependudukan Berdasarkan Jenis Kelamin',
     description: 'Rincian jumlah warga penduduk Desa Tawalian Timur berdasarkan kategori jenis kelamin menurut data terbaru tahun ini.',
+    dataCategory: 'demografi',
+    thumbnail: 'https://images.unsplash.com/photo-1517048676732-d65bc937f952?q=80&w=800&auto=format&fit=crop',
     type: 'pie',
     items: [
       { label: 'Laki-Laki', value: 1850 },
@@ -82,6 +84,8 @@ export const INITIAL_STATISTICS: StatisticCategory[] = [
     id: 'pendidikan',
     title: 'Tingkat Pendidikan Penduduk',
     description: 'Profil kualifikasi pendidikan formal tertinggi yang ditempuh oleh warga Desa Tawalian Timur.',
+    dataCategory: 'pendidikan',
+    thumbnail: 'https://images.unsplash.com/photo-1497633762265-9d179a990aa6?q=80&w=800&auto=format&fit=crop',
     type: 'bar',
     items: [
       { label: 'Tidak/Belum Sekolah', value: 180 },
@@ -97,6 +101,8 @@ export const INITIAL_STATISTICS: StatisticCategory[] = [
     id: 'pekerjaan',
     title: 'Mata Pencaharian Utama Warga',
     description: 'Tingkat persebaran pekerjaan utama warga produktif di wilayah Desa Tawalian Timur.',
+    dataCategory: 'ekonomi',
+    thumbnail: 'https://images.unsplash.com/photo-1454165804606-c3d57bc86b40?q=80&w=800&auto=format&fit=crop',
     type: 'donut',
     items: [
       { label: 'Petani & Pekebun', value: 1150 },
@@ -112,6 +118,8 @@ export const INITIAL_STATISTICS: StatisticCategory[] = [
     id: 'pertanian',
     title: 'Volume Hasil Pertanian & Perkebunan',
     description: 'Hasil produksi komoditas pangan utama Desa Tawalian Timur dalam satuan Ton per tahun (data kumulatif tahun terakhir).',
+    dataCategory: 'pertanian',
+    thumbnail: 'https://images.unsplash.com/photo-1500382017468-9049fed747ef?q=80&w=800&auto=format&fit=crop',
     type: 'line',
     items: [
       { label: 'Padi Gogo', value: 870 },
