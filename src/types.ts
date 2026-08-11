@@ -3,12 +3,16 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+export type NewsVideoProvider = 'upload' | 'youtube' | 'instagram' | 'facebook';
+
 export interface News {
   id: string;
   title: string;
   content: string;
   category: string;
   thumbnail: string;
+  videoProvider?: NewsVideoProvider;
+  videoUrl?: string;
   status: 'Draft' | 'Published';
   datePublished: string;
 }

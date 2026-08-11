@@ -27,11 +27,13 @@ import {
   updateEntityContent,
 } from './repository.mjs';
 import {
+  collectEntityVideoUrls,
   deleteRemovedEntityImages,
   deleteUploadedPaths,
   materializeAdminAvatar,
   materializeEntityImages,
 } from './media-service.mjs';
+import { MAX_NEWS_VIDEO_BYTES } from './media-storage.mjs';
 
 const apiResult = (body, status = 200) => ({ status, body });
 
@@ -49,6 +51,7 @@ const CITIZEN_CATEGORIES = [
   'Pelayanan Administrasi Kependudukan',
   'Lainnya',
 ];
+const NEWS_VIDEO_PROVIDERS = ['upload', 'youtube', 'instagram', 'facebook'];
 
 const trimmedString = (value) => typeof value === 'string' ? value.trim() : '';
 
@@ -185,7 +188,166 @@ const filterPortalNews = (portalData, admin) => {
   };
 };
 
-const validateNews = (news) => {
+const YOUTUBE_VIDEO_ID_PATTERN = /^[A-Za-z0-9_-]{11}$/;
+const INSTAGRAM_CODE_PATTERN = /^[A-Za-z0-9_-]{5,64}$/;
+const FACEBOOK_VIDEO_ID_PATTERN = /^\d{5,32}$/;
+const FACEBOOK_SHORT_CODE_PATTERN = /^[A-Za-z0-9_-]{5,128}$/;
+const FACEBOOK_PAGE_PATTERN = /^[A-Za-z0-9._-]{1,100}$/;
+
+const normalizedVideoHost = (url) => url.hostname.toLowerCase().replace(/\.$/, '');
+
+const parseStrictHttpsUrl = (value) => {
+  if (typeof value !== 'string' || !value.trim() || value.length > 2048) return null;
+  try {
+    const url = new URL(value.trim());
+    if (
+      url.protocol !== 'https:' ||
+      url.username ||
+      url.password ||
+      url.port
+    ) return null;
+    return url;
+  } catch {
+    return null;
+  }
+};
+
+const isYouTubeUrl = (url) => {
+  const host = normalizedVideoHost(url);
+  const segments = url.pathname.split('/').filter(Boolean);
+  if (host === 'youtu.be') {
+    return segments.length === 1 && YOUTUBE_VIDEO_ID_PATTERN.test(segments[0]);
+  }
+  if (['youtube.com', 'www.youtube.com', 'm.youtube.com'].includes(host)) {
+    if (
+      (url.pathname === '/watch' || url.pathname === '/watch/') &&
+      segments.length === 1
+    ) {
+      return YOUTUBE_VIDEO_ID_PATTERN.test(url.searchParams.get('v') || '');
+    }
+    return segments.length === 2 &&
+      ['shorts', 'embed', 'live'].includes(segments[0]) &&
+      YOUTUBE_VIDEO_ID_PATTERN.test(segments[1]);
+  }
+  if (['youtube-nocookie.com', 'www.youtube-nocookie.com'].includes(host)) {
+    return segments.length === 2 &&
+      segments[0] === 'embed' &&
+      YOUTUBE_VIDEO_ID_PATTERN.test(segments[1]);
+  }
+  return false;
+};
+
+const isInstagramUrl = (url) => {
+  const host = normalizedVideoHost(url);
+  if (!['instagram.com', 'www.instagram.com', 'm.instagram.com'].includes(host)) return false;
+  const segments = url.pathname.split('/').filter(Boolean);
+  return segments.length === 2 &&
+    ['p', 'reel', 'tv'].includes(segments[0]) &&
+    INSTAGRAM_CODE_PATTERN.test(segments[1]);
+};
+
+const isFacebookUrl = (url) => {
+  const host = normalizedVideoHost(url);
+  const segments = url.pathname.split('/').filter(Boolean);
+  if (host === 'fb.watch') {
+    return segments.length === 1 && FACEBOOK_SHORT_CODE_PATTERN.test(segments[0]);
+  }
+  if (![
+    'facebook.com',
+    'www.facebook.com',
+    'm.facebook.com',
+    'web.facebook.com',
+  ].includes(host)) return false;
+  if (
+    (url.pathname === '/watch' || url.pathname === '/watch/') &&
+    segments.length === 1
+  ) {
+    return FACEBOOK_VIDEO_ID_PATTERN.test(url.searchParams.get('v') || '');
+  }
+  if (url.pathname === '/video.php' && segments.length === 1) {
+    return FACEBOOK_VIDEO_ID_PATTERN.test(url.searchParams.get('v') || '');
+  }
+  if (
+    segments.length === 2 &&
+    segments[0] === 'reel' &&
+    FACEBOOK_VIDEO_ID_PATTERN.test(segments[1])
+  ) return true;
+  if (
+    segments.length === 3 &&
+    segments[0] === 'share' &&
+    segments[1] === 'v' &&
+    FACEBOOK_SHORT_CODE_PATTERN.test(segments[2])
+  ) return true;
+  return segments.length === 3 &&
+    FACEBOOK_PAGE_PATTERN.test(segments[0]) &&
+    segments[1] === 'videos' &&
+    FACEBOOK_VIDEO_ID_PATTERN.test(segments[2]);
+};
+
+const isOwnedNewsVideoPath = (mediaStorage, path, entityId) => {
+  if (!mediaStorage || typeof path !== 'string') return false;
+  const owner = { ownerType: 'entities', ownerId: entityId };
+  const expectedPrefix = `${mediaStorage.getOwnerPrefix(owner)}news-videos/`;
+  const fileName = path.startsWith(expectedPrefix)
+    ? path.slice(expectedPrefix.length)
+    : '';
+  return Boolean(
+    mediaStorage.ownsVideoPath?.(path, owner) &&
+    /^[A-Za-z0-9-]+\.mp4$/i.test(fileName),
+  );
+};
+
+const validateNewsVideo = (article, entityId, mediaStorage) => {
+  const hasProvider = Object.prototype.hasOwnProperty.call(article, 'videoProvider');
+  const hasVideoUrl = Object.prototype.hasOwnProperty.call(article, 'videoUrl');
+  if (hasProvider && typeof article.videoProvider !== 'string') {
+    throw validationError(`Sumber video berita "${article.title}" harus berupa teks.`);
+  }
+  if (hasVideoUrl && typeof article.videoUrl !== 'string') {
+    throw validationError(`Tautan video berita "${article.title}" harus berupa teks.`);
+  }
+
+  const provider = trimmedString(article.videoProvider);
+  const videoUrl = trimmedString(article.videoUrl);
+  if (!provider) {
+    if (videoUrl) {
+      throw validationError(`Sumber video berita "${article.title}" wajib dipilih.`);
+    }
+    return;
+  }
+  if (
+    article.videoProvider !== provider ||
+    !NEWS_VIDEO_PROVIDERS.includes(provider) ||
+    !videoUrl
+  ) {
+    throw validationError(`Sumber atau tautan video berita "${article.title}" tidak valid.`);
+  }
+
+  if (provider === 'upload') {
+    if (!mediaStorage) {
+      throw apiError('Supabase Storage video belum dikonfigurasi pada server.', 503);
+    }
+    const path = mediaStorage.getVideoObjectPath?.(videoUrl);
+    if (!isOwnedNewsVideoPath(mediaStorage, path, entityId)) {
+      throw validationError(`Video unggahan berita "${article.title}" bukan milik wilayah ini.`);
+    }
+    return;
+  }
+
+  const parsedUrl = parseStrictHttpsUrl(videoUrl);
+  const valid = parsedUrl && (
+    (provider === 'youtube' && isYouTubeUrl(parsedUrl)) ||
+    (provider === 'instagram' && isInstagramUrl(parsedUrl)) ||
+    (provider === 'facebook' && isFacebookUrl(parsedUrl))
+  );
+  if (!valid) {
+    throw validationError(
+      `Tautan ${provider} pada berita "${article.title}" harus berasal dari situs resminya.`,
+    );
+  }
+};
+
+const validateNews = (news, entityId, mediaStorage) => {
   if (!Array.isArray(news)) {
     throw validationError('Data berita harus berupa daftar.');
   }
@@ -222,6 +384,7 @@ const validateNews = (news) => {
     ) {
       throw validationError(`Tanggal rilis berita "${article.title}" harus berformat YYYY-MM-DD.`);
     }
+    validateNewsVideo(article, entityId, mediaStorage);
   }
 };
 
@@ -580,6 +743,75 @@ const dispatch = async ({
     return apiResult({ success: true });
   }
 
+  if (requestMethod === 'POST' && staticPath === '/api/admin/video-upload-ticket') {
+    const { admin } = await requireSession(authorization, ['admin', 'super_admin']);
+    const entityId = trimmedString(body.entityId);
+    const fileName = trimmedString(body.fileName);
+    const contentType = trimmedString(body.contentType).toLowerCase();
+    const size = body.size;
+    if (!entityId || admin.assignedEntityId !== entityId) {
+      return apiResult({ error: 'Admin hanya dapat mengunggah video wilayah tugasnya.' }, 403);
+    }
+    if (
+      !fileName ||
+      fileName.length > 255 ||
+      !/\.mp4$/i.test(fileName) ||
+      contentType !== 'video/mp4'
+    ) {
+      throw validationError('Video berita harus berupa berkas MP4.');
+    }
+    if (!Number.isInteger(size) || size <= 0 || size > MAX_NEWS_VIDEO_BYTES) {
+      throw validationError('Ukuran video berita harus lebih dari 0 byte dan maksimal 40 MB.');
+    }
+    if (!mediaStorage?.createVideoUploadTicket) {
+      throw apiError(
+        'Supabase Storage video belum dikonfigurasi. Isi SUPABASE_VIDEO_BUCKET pada environment server.',
+        503,
+      );
+    }
+    const ticket = await mediaStorage.createVideoUploadTicket({
+      ownerType: 'entities',
+      ownerId: entityId,
+      collection: 'news-videos',
+    });
+    return apiResult(ticket, 201);
+  }
+
+  if (requestMethod === 'POST' && staticPath === '/api/admin/video-upload-cleanup') {
+    const { admin } = await requireSession(authorization, ['admin', 'super_admin']);
+    const entityId = trimmedString(body.entityId);
+    const path = trimmedString(body.path);
+    if (!entityId || admin.assignedEntityId !== entityId) {
+      return apiResult({ error: 'Admin hanya dapat membersihkan video wilayah tugasnya.' }, 403);
+    }
+    if (!mediaStorage?.deleteVideoPaths) {
+      throw apiError('Supabase Storage video belum dikonfigurasi pada server.', 503);
+    }
+    if (
+      !path ||
+      path.length > 1000 ||
+      !isOwnedNewsVideoPath(mediaStorage, path, entityId)
+    ) {
+      throw validationError('Lokasi video yang akan dibersihkan tidak valid.');
+    }
+
+    const entity = (await getPortalData()).entities.find((item) => item.id === entityId);
+    if (!entity) {
+      return apiResult({ error: 'Wilayah tidak ditemukan.' }, 404);
+    }
+    const referencedPaths = new Set(
+      [...collectEntityVideoUrls(entity.content)]
+        .map((url) => mediaStorage.getVideoObjectPath?.(url))
+        .filter(Boolean),
+    );
+    if (referencedPaths.has(path)) {
+      return apiResult({ success: true, deleted: false, reason: 'still_referenced' });
+    }
+
+    await mediaStorage.deleteVideoPaths([path]);
+    return apiResult({ success: true, deleted: true });
+  }
+
   if (requestMethod === 'GET' && staticPath === '/api/admin/citizen-submissions') {
     const { admin } = await requireSession(authorization);
     return apiResult({
@@ -641,7 +873,7 @@ const dispatch = async ({
       }, 403);
     }
     if (updates.statistics !== undefined) validateStatistics(updates.statistics);
-    if (updates.news !== undefined) validateNews(updates.news);
+    if (updates.news !== undefined) validateNews(updates.news, entityId, mediaStorage);
     if (updates.gallery !== undefined) validateGallery(updates.gallery);
     if (updates.profile !== undefined) validateContactProfile(updates.profile);
     validateContentImages(updates);

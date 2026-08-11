@@ -1,6 +1,15 @@
 const KILOBYTE = 1024;
 export const MAX_IMAGE_BYTES = 500 * KILOBYTE;
 const TARGET_BYTES = 350 * KILOBYTE;
+const MIN_WEBP_QUALITY = 0.3;
+const MAX_WEBP_QUALITY = 0.95;
+
+export class ImageTooLargeError extends Error {
+  constructor() {
+    super('Foto tidak dapat diperkecil hingga maksimal 500 KB.');
+    this.name = 'ImageTooLargeError';
+  }
+}
 
 export interface ProcessedImage {
   dataUrl: string;
@@ -38,7 +47,7 @@ const toWebP = (canvas: HTMLCanvasElement, quality: number): Promise<Blob> =>
     );
   });
 
-const toDataUrl = (blob: Blob): Promise<string> =>
+export const blobToDataUrl = (blob: Blob): Promise<string> =>
   new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(reader.result as string);
@@ -57,8 +66,8 @@ const render = (image: HTMLImageElement, scale: number) => {
 };
 
 const bestQuality = async (canvas: HTMLCanvasElement) => {
-  let low = 0.3;
-  let high = 0.95;
+  let low = MIN_WEBP_QUALITY;
+  let high = MAX_WEBP_QUALITY;
   let closest = await toWebP(canvas, high);
   for (let attempt = 0; attempt < 9; attempt += 1) {
     const quality = (low + high) / 2;
@@ -70,6 +79,31 @@ const bestQuality = async (canvas: HTMLCanvasElement) => {
     else low = quality;
   }
   return closest;
+};
+
+/**
+ * Mengubah isi canvas menjadi WebP berukuran aman untuk Supabase Storage.
+ *
+ * Helper ini sengaja diekspor agar frame dari video dan foto biasa memakai
+ * aturan ukuran/kualitas yang sama. Caller tetap bertanggung jawab mengecilkan
+ * dimensi canvas terlebih dahulu bila encode gagal karena gambarnya terlalu
+ * besar.
+ */
+export const encodeCanvasToWebP = async (canvas: HTMLCanvasElement): Promise<Blob> => {
+  if (canvas.width < 1 || canvas.height < 1) {
+    throw new Error('Gambar tidak memiliki ukuran yang dapat diproses.');
+  }
+
+  const smallest = await toWebP(canvas, MIN_WEBP_QUALITY);
+  if (smallest.size > MAX_IMAGE_BYTES) {
+    throw new ImageTooLargeError();
+  }
+
+  const result = await bestQuality(canvas);
+  if (result.size > MAX_IMAGE_BYTES) {
+    return smallest;
+  }
+  return result;
 };
 
 export const processImageToWebP = async (file: File): Promise<ProcessedImage> => {
@@ -84,21 +118,23 @@ export const processImageToWebP = async (file: File): Promise<ProcessedImage> =>
 
   for (let attempt = 0; attempt < 10; attempt += 1) {
     const canvas = render(image, scale);
-    const smallest = await toWebP(canvas, 0.3);
-    if (smallest.size > MAX_IMAGE_BYTES) {
+    try {
+      result = await encodeCanvasToWebP(canvas);
+      break;
+    } catch (error) {
+      if (!(error instanceof ImageTooLargeError)) {
+        throw error;
+      }
       scale *= 0.85;
-      continue;
     }
-    result = await bestQuality(canvas);
-    break;
   }
 
   if (!result || result.size > MAX_IMAGE_BYTES) {
-    throw new Error('Foto tidak dapat diperkecil hingga maksimal 500 KB.');
+    throw new ImageTooLargeError();
   }
   const baseName = file.name.replace(/\.[^/.]+$/, '').trim() || `foto-${Date.now()}`;
   return {
-    dataUrl: await toDataUrl(result),
+    dataUrl: await blobToDataUrl(result),
     fileName: `${baseName}.webp`,
     size: result.size,
   };

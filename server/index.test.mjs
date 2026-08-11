@@ -274,6 +274,228 @@ test('backend menyimpan data dan membatasi hak akses berdasarkan peran', async (
     Authorization: `Bearer ${villageLogin.body.token}`,
   };
 
+  const anonymousVideoTicket = await request('/api/admin/video-upload-ticket', {
+    method: 'POST',
+    body: JSON.stringify({
+      entityId: 'desa-satu',
+      fileName: 'kegiatan.mp4',
+      contentType: 'video/mp4',
+      size: 1024,
+    }),
+  });
+  assert.equal(anonymousVideoTicket.response.status, 401);
+
+  const crossEntityVideoTicket = await request('/api/admin/video-upload-ticket', {
+    method: 'POST',
+    headers: districtHeaders,
+    body: JSON.stringify({
+      entityId: 'desa-satu',
+      fileName: 'kegiatan.mp4',
+      contentType: 'video/mp4',
+      size: 1024,
+    }),
+  });
+  assert.equal(crossEntityVideoTicket.response.status, 403);
+
+  const invalidVideoType = await request('/api/admin/video-upload-ticket', {
+    method: 'POST',
+    headers: villageHeaders,
+    body: JSON.stringify({
+      entityId: 'desa-satu',
+      fileName: 'kegiatan.webm',
+      contentType: 'video/webm',
+      size: 1024,
+    }),
+  });
+  assert.equal(invalidVideoType.response.status, 400);
+
+  const oversizedVideo = await request('/api/admin/video-upload-ticket', {
+    method: 'POST',
+    headers: villageHeaders,
+    body: JSON.stringify({
+      entityId: 'desa-satu',
+      fileName: 'kegiatan.mp4',
+      contentType: 'video/mp4',
+      size: (40 * 1024 * 1024) + 1,
+    }),
+  });
+  assert.equal(oversizedVideo.response.status, 400);
+
+  const videoTicket = await request('/api/admin/video-upload-ticket', {
+    method: 'POST',
+    headers: villageHeaders,
+    body: JSON.stringify({
+      entityId: 'desa-satu',
+      fileName: 'kegiatan.mp4',
+      contentType: 'video/mp4',
+      size: 2 * 1024 * 1024,
+    }),
+  });
+  assert.equal(videoTicket.response.status, 201);
+  assert.equal(videoTicket.body.bucket, 'portal-videos');
+  assert.match(
+    videoTicket.body.path,
+    /^entities\/desa-satu\/news-videos\/[^/]+\.mp4$/,
+  );
+  assert.equal(videoTicket.body.publicUrl.includes('sb_secret_'), false);
+  assert.equal(videoTicket.body.tusEndpoint.includes('sb_secret_'), false);
+  assert.ok(videoTicket.body.token);
+
+  const crossEntityCleanup = await request('/api/admin/video-upload-cleanup', {
+    method: 'POST',
+    headers: districtHeaders,
+    body: JSON.stringify({
+      entityId: 'desa-satu',
+      path: videoTicket.body.path,
+    }),
+  });
+  assert.equal(crossEntityCleanup.response.status, 403);
+
+  const invalidVideoCleanup = await request('/api/admin/video-upload-cleanup', {
+    method: 'POST',
+    headers: villageHeaders,
+    body: JSON.stringify({
+      entityId: 'desa-satu',
+      path: 'entities/desa-satu/statistics/foto.webp',
+    }),
+  });
+  assert.equal(invalidVideoCleanup.response.status, 400);
+
+  const uploadedVideoNews = await request('/api/entities/desa-satu/content', {
+    method: 'PATCH',
+    headers: villageHeaders,
+    body: JSON.stringify({
+      updates: {
+        news: [{
+          id: 'berita-video-upload',
+          title: 'Berita Video Unggahan',
+          content: 'Berita ini menggunakan video MP4 milik wilayah Desa Satu.',
+          category: 'Pemerintahan',
+          thumbnail: 'https://images.example/berita-video.webp',
+          status: 'Draft',
+          datePublished: '',
+          videoProvider: 'upload',
+          videoUrl: videoTicket.body.publicUrl,
+        }],
+      },
+    }),
+  });
+  assert.equal(uploadedVideoNews.response.status, 200);
+
+  const referencedVideoCleanup = await request('/api/admin/video-upload-cleanup', {
+    method: 'POST',
+    headers: villageHeaders,
+    body: JSON.stringify({
+      entityId: 'desa-satu',
+      path: videoTicket.body.path,
+    }),
+  });
+  assert.equal(referencedVideoCleanup.response.status, 200);
+  assert.equal(referencedVideoCleanup.body.deleted, false);
+  assert.equal(referencedVideoCleanup.body.reason, 'still_referenced');
+
+  const crossEntityUploadedVideo = await request('/api/entities/desa-satu/content', {
+    method: 'PATCH',
+    headers: villageHeaders,
+    body: JSON.stringify({
+      updates: {
+        news: [{
+          ...uploadedVideoNews.body.data.news[0],
+          videoUrl: uploadedVideoNews.body.data.news[0].videoUrl.replace(
+            '/entities/desa-satu/',
+            '/entities/kecamatan-tawalian/',
+          ),
+        }],
+      },
+    }),
+  });
+  assert.equal(crossEntityUploadedVideo.response.status, 400);
+
+  const externalVideoNews = await request('/api/entities/desa-satu/content', {
+    method: 'PATCH',
+    headers: villageHeaders,
+    body: JSON.stringify({
+      updates: {
+        news: [
+          {
+            id: 'berita-video-youtube',
+            title: 'Berita Video YouTube',
+            content: 'Berita ini menggunakan video dari kanal YouTube resmi.',
+            category: 'Pemerintahan',
+            thumbnail: 'https://images.example/berita-youtube.webp',
+            status: 'Draft',
+            datePublished: '',
+            videoProvider: 'youtube',
+            videoUrl: 'https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ',
+          },
+          {
+            id: 'berita-video-instagram',
+            title: 'Berita Video Instagram',
+            content: 'Berita ini menggunakan video dari akun Instagram resmi.',
+            category: 'Pemerintahan',
+            thumbnail: 'https://images.example/berita-instagram.webp',
+            status: 'Draft',
+            datePublished: '',
+            videoProvider: 'instagram',
+            videoUrl: 'https://m.instagram.com/reel/C9xY_z-12ab/',
+          },
+          {
+            id: 'berita-video-facebook',
+            title: 'Berita Video Facebook',
+            content: 'Berita ini menggunakan video dari halaman Facebook resmi.',
+            category: 'Pemerintahan',
+            thumbnail: 'https://images.example/berita-facebook.webp',
+            status: 'Draft',
+            datePublished: '',
+            videoProvider: 'facebook',
+            videoUrl: 'https://web.facebook.com/desa.tawalian/videos/1234567890/',
+          },
+        ],
+      },
+    }),
+  });
+  assert.equal(externalVideoNews.response.status, 200);
+  assert.equal(externalVideoNews.body.data.news.length, 3);
+
+  const fakeExternalVideoNews = await request('/api/entities/desa-satu/content', {
+    method: 'PATCH',
+    headers: villageHeaders,
+    body: JSON.stringify({
+      updates: {
+        news: [{
+          ...externalVideoNews.body.data.news[0],
+          videoUrl: 'https://youtube.example.test/watch?v=dQw4w9WgXcQ',
+        }],
+      },
+    }),
+  });
+  assert.equal(fakeExternalVideoNews.response.status, 400);
+
+  const nonStringVideoFields = await request('/api/entities/desa-satu/content', {
+    method: 'PATCH',
+    headers: villageHeaders,
+    body: JSON.stringify({
+      updates: {
+        news: [{
+          ...externalVideoNews.body.data.news[0],
+          videoProvider: false,
+          videoUrl: 12345,
+        }],
+      },
+    }),
+  });
+  assert.equal(nonStringVideoFields.response.status, 400);
+
+  const cleanVideoUpload = await request('/api/admin/video-upload-cleanup', {
+    method: 'POST',
+    headers: villageHeaders,
+    body: JSON.stringify({
+      entityId: 'desa-satu',
+      path: videoTicket.body.path,
+    }),
+  });
+  assert.equal(cleanVideoUpload.response.status, 200);
+
   const contactUpdate = await request('/api/entities/desa-satu/content', {
     method: 'PATCH',
     headers: villageHeaders,

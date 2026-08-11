@@ -180,6 +180,20 @@ export const collectEntityImageUrls = (content) => {
   return urls;
 };
 
+export const collectEntityVideoUrls = (content) => {
+  const urls = new Set();
+  for (const article of content?.news || []) {
+    if (
+      article?.videoProvider === 'upload' &&
+      typeof article.videoUrl === 'string' &&
+      article.videoUrl
+    ) {
+      urls.add(article.videoUrl);
+    }
+  }
+  return urls;
+};
+
 export const collectOwnedPaths = (storage, urls) => {
   if (!storage) return new Set();
   return new Set(
@@ -206,4 +220,18 @@ export const deleteRemovedEntityImages = async (
   await storage.deletePaths(
     [...previous].filter((path) => storage.ownsPath(path, owner) && !next.has(path)),
   );
+
+  const previousVideos = new Set(
+    [...collectEntityVideoUrls(previousContent)]
+      .map((url) => storage.getVideoObjectPath?.(url))
+      .filter(Boolean),
+  );
+  const nextVideos = new Set(
+    [...collectEntityVideoUrls(nextContent)]
+      .map((url) => storage.getVideoObjectPath?.(url))
+      .filter(Boolean),
+  );
+  const removedVideos = [...previousVideos].filter((path) =>
+    storage.ownsVideoPath?.(path, owner) && !nextVideos.has(path));
+  if (removedVideos.length) await storage.deleteVideoPaths(removedVideos);
 };

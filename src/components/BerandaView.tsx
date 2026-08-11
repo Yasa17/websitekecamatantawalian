@@ -4,7 +4,7 @@
  */
 
 import React from 'react';
-import { Newspaper, Image as ImageIcon, MapPin, ArrowRight, TrendingUp, Users, ShieldAlert } from 'lucide-react';
+import { Newspaper, Image as ImageIcon, MapPin, ArrowRight, TrendingUp, Users, ShieldAlert, PlayCircle } from 'lucide-react';
 import { VillageProfile, StatisticCategory, News, GalleryItem } from '../types';
 import { formatNewsDate, isNewsReleased, sortNewsNewestFirst } from '../utils/newsDate';
 
@@ -205,6 +205,12 @@ export default function BerandaView({
                       {item.category}
                     </span>
                   </div>
+                  {item.videoUrl && (
+                    <span className="absolute bottom-3 right-3 inline-flex items-center gap-1 rounded-full bg-slate-950/80 px-2.5 py-1 text-[10px] font-bold uppercase text-white shadow">
+                      <PlayCircle className="h-3.5 w-3.5" />
+                      Video
+                    </span>
+                  )}
                 </div>
                 
                 <div className="p-5 flex-grow flex flex-col justify-between space-y-4">

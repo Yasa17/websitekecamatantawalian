@@ -4,9 +4,10 @@
  */
 
 import React, { useEffect, useState } from 'react';
-import { Search, Calendar, User, ArrowLeft, ArrowRight, Share2, Tag, BookOpen, AlertCircle } from 'lucide-react';
+import { Search, Calendar, User, ArrowLeft, ArrowRight, Share2, Tag, BookOpen, AlertCircle, PlayCircle } from 'lucide-react';
 import { News } from '../types';
 import { formatNewsDate, isNewsReleased, sortNewsNewestFirst } from '../utils/newsDate';
+import { resolveVideoEmbed, type VideoEmbedProvider } from '../utils/videoEmbed';
 
 interface PortalBeritaViewProps {
   news: News[];
@@ -47,6 +48,12 @@ export default function PortalBeritaView({
 
   // Render Single News Article Details Reader Grid
   if (activeSelectedNews) {
+    const embeddedVideo = activeSelectedNews.videoUrl && activeSelectedNews.videoProvider && activeSelectedNews.videoProvider !== 'upload'
+      ? resolveVideoEmbed(
+          activeSelectedNews.videoProvider as VideoEmbedProvider,
+          activeSelectedNews.videoUrl,
+        )
+      : null;
     return (
       <div id="read-news-detail" className="space-y-6 animate-fadeIn">
         <button
@@ -102,6 +109,35 @@ export default function PortalBeritaView({
                 <span>{activeSelectedNews.category}</span>
               </span>
             </div>
+
+            {activeSelectedNews.videoProvider === 'upload' && activeSelectedNews.videoUrl && (
+              <div className="overflow-hidden rounded-2xl border border-gray-200 bg-slate-950 shadow-sm">
+                <video
+                  src={activeSelectedNews.videoUrl}
+                  poster={activeSelectedNews.thumbnail}
+                  controls
+                  playsInline
+                  preload="metadata"
+                  className="aspect-video w-full object-contain"
+                >
+                  Browser Anda belum mendukung pemutar video HTML5.
+                </video>
+              </div>
+            )}
+
+            {embeddedVideo && (
+              <div className="overflow-hidden rounded-2xl border border-gray-200 bg-slate-950 shadow-sm">
+                <iframe
+                  src={embeddedVideo.embedUrl}
+                  title={`Video: ${activeSelectedNews.title}`}
+                  className="aspect-video w-full"
+                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                  allowFullScreen
+                  loading="lazy"
+                  referrerPolicy="strict-origin-when-cross-origin"
+                />
+              </div>
+            )}
 
             {/* Paragraph Text renderer */}
             <div className="prose max-w-none text-gray-750 leading-relaxed text-sm md:text-md space-y-5 text-justify">
@@ -207,6 +243,12 @@ export default function PortalBeritaView({
                     {item.category}
                   </span>
                 </div>
+                {item.videoUrl && (
+                  <span className="absolute bottom-3 right-3 inline-flex items-center gap-1 rounded-full bg-slate-950/80 px-2.5 py-1 text-[10px] font-bold uppercase text-white shadow">
+                    <PlayCircle className="h-3.5 w-3.5" />
+                    Video
+                  </span>
+                )}
               </div>
 
               {/* Descriptions & Read button */}

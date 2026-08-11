@@ -24,9 +24,28 @@ import {
   LoaderCircle,
   MessagesSquare,
   PhoneCall,
+  Video,
+  Link2,
+  PlayCircle,
+  X,
 } from 'lucide-react';
-import { VillageProfile, StatisticCategory, News, GalleryItem, AdminProfile } from '../types';
+import {
+  VillageProfile,
+  StatisticCategory,
+  News,
+  GalleryItem,
+  AdminProfile,
+  type NewsVideoProvider,
+} from '../types';
 import { formatImageSize, processImageToWebP, type ProcessedImage } from '../utils/imageUpload';
+import { extractVideoThumbnailToWebP } from '../utils/videoThumbnail';
+import { resolveVideoEmbed, type VideoEmbedProvider } from '../utils/videoEmbed';
+import {
+  cleanupUploadedNewsVideo,
+  formatVideoSize,
+  uploadNewsVideo,
+  validateNewsVideoFile,
+} from '../utils/videoUpload';
 import {
   formatNewsDate,
   isNewsReleased,
@@ -53,6 +72,9 @@ interface AdminDashboardProps {
   districtEntities?: DistrictEntitySummary[];
   onLogout: () => void;
 }
+
+const isEmbedProvider = (provider: string): provider is VideoEmbedProvider =>
+  provider === 'youtube' || provider === 'instagram' || provider === 'facebook';
 
 export default function AdminDashboard({
   villageProfile,
@@ -85,9 +107,17 @@ export default function AdminDashboard({
     content: '',
     category: 'Umum',
     thumbnail: '',
+    videoProvider: '' as '' | NewsVideoProvider,
+    videoUrl: '',
     status: 'Published' as 'Published' | 'Draft',
     datePublished: localIsoDate(),
   });
+  const [pendingNewsVideo, setPendingNewsVideo] = useState<File | null>(null);
+  const [newsVideoPreviewUrl, setNewsVideoPreviewUrl] = useState('');
+  const [isProcessingNewsVideo, setIsProcessingNewsVideo] = useState(false);
+  const [newsVideoUploadProgress, setNewsVideoUploadProgress] = useState(0);
+  const [newsThumbnailSource, setNewsThumbnailSource] = useState<'none' | 'auto' | 'manual'>('none');
+  const [automaticThumbnailTime, setAutomaticThumbnailTime] = useState<number | null>(null);
 
   // GALLERY States & Multi-Photo modes
   const [galleryForm, setGalleryForm] = useState({
@@ -135,6 +165,16 @@ export default function AdminDashboard({
       avatarUrl: adminProfile.avatarUrl,
     }));
   }, [adminProfile]);
+
+  useEffect(() => {
+    if (!pendingNewsVideo) {
+      setNewsVideoPreviewUrl('');
+      return undefined;
+    }
+    const objectUrl = URL.createObjectURL(pendingNewsVideo);
+    setNewsVideoPreviewUrl(objectUrl);
+    return () => URL.revokeObjectURL(objectUrl);
+  }, [pendingNewsVideo]);
 
   // Toast trigger
   const showToast = (message: string, type: 'success' | 'info' = 'success') => {
@@ -305,16 +345,127 @@ export default function AdminDashboard({
   };
 
   // 2. NEWS CRUD
+  const resetNewsEditor = () => {
+    setEditingNews(null);
+    setIsAddingNews(false);
+    setPendingNewsVideo(null);
+    setNewsVideoUploadProgress(0);
+    setNewsThumbnailSource('none');
+    setAutomaticThumbnailTime(null);
+    setNewsForm({
+      title: '',
+      content: '',
+      category: 'Umum',
+      thumbnail: '',
+      videoProvider: '',
+      videoUrl: '',
+      status: 'Published',
+      datePublished: localIsoDate(),
+    });
+  };
+
+  const handleNewsVideoProviderChange = (provider: '' | NewsVideoProvider) => {
+    setPendingNewsVideo(null);
+    setNewsVideoUploadProgress(0);
+    setAutomaticThumbnailTime(null);
+    setNewsForm((current) => ({
+      ...current,
+      videoProvider: provider,
+      videoUrl: '',
+      thumbnail: newsThumbnailSource === 'manual' ? current.thumbnail : '',
+    }));
+    if (newsThumbnailSource !== 'manual') setNewsThumbnailSource('none');
+  };
+
+  const handleNewsVideoFile = async (file: File) => {
+    try {
+      validateNewsVideoFile(file);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Berkas video tidak valid.', 'info');
+      return;
+    }
+
+    setPendingNewsVideo(file);
+    const keepManualThumbnail = newsThumbnailSource === 'manual';
+    setNewsForm((current) => ({
+      ...current,
+      videoProvider: 'upload',
+      videoUrl: '',
+      thumbnail: keepManualThumbnail ? current.thumbnail : '',
+    }));
+    if (!keepManualThumbnail) setNewsThumbnailSource('none');
+    setAutomaticThumbnailTime(null);
+
+    // Thumbnail pilihan operator selalu menjadi prioritas. Tidak perlu
+    // mengekstrak frame yang nantinya hanya akan dibuang.
+    if (keepManualThumbnail) return;
+
+    setIsProcessingNewsVideo(true);
+    try {
+      const generated = await extractVideoThumbnailToWebP(file);
+      setNewsForm((current) => ({ ...current, thumbnail: generated.dataUrl }));
+      setNewsThumbnailSource('auto');
+      setAutomaticThumbnailTime(generated.timeSeconds);
+      showToast('Thumbnail otomatis berhasil diambil dari salah satu frame video.');
+    } catch (error) {
+      setNewsThumbnailSource('none');
+      showToast(
+        `${error instanceof Error ? error.message : 'Frame video tidak dapat dibaca.'} Silakan pilih thumbnail sendiri.`,
+        'info',
+      );
+    } finally {
+      setIsProcessingNewsVideo(false);
+    }
+  };
+
   const handleSaveNews = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newsForm.title.trim() || !newsForm.content.trim() || !newsForm.thumbnail || !newsForm.datePublished) {
+    const embed = isEmbedProvider(newsForm.videoProvider)
+      ? resolveVideoEmbed(newsForm.videoProvider, newsForm.videoUrl)
+      : null;
+    const effectiveThumbnail = newsForm.thumbnail || embed?.thumbnailUrl || '';
+    if (!newsForm.title.trim() || !newsForm.content.trim() || !effectiveThumbnail || !newsForm.datePublished) {
       showToast('Judul, isi berita, thumbnail, dan tanggal rilis wajib diisi.', 'info');
+      return;
+    }
+    if (isEmbedProvider(newsForm.videoProvider) && !embed) {
+      showToast(`Tautan ${newsForm.videoProvider} belum valid atau bukan tautan video publik.`, 'info');
+      return;
+    }
+    if (newsForm.videoProvider === 'upload' && !pendingNewsVideo && !newsForm.videoUrl) {
+      showToast('Pilih berkas video MP4 terlebih dahulu.', 'info');
       return;
     }
     if (savingOperation) return;
     setSavingOperation('news');
+    setNewsVideoUploadProgress(0);
+
+    let newlyUploadedVideo: { path: string; publicUrl: string } | null = null;
+
+    const cleanupUnreferencedUpload = async () => {
+      if (!newlyUploadedVideo || !adminProfile.assignedEntityId) return;
+      await cleanupUploadedNewsVideo(
+        adminProfile.assignedEntityId,
+        newlyUploadedVideo.path,
+      ).catch((error) => console.error('Pembersihan video tertunda:', error));
+    };
 
     try {
+      let videoUrl = embed?.sourceUrl || newsForm.videoUrl || undefined;
+      if (newsForm.videoProvider === 'upload' && pendingNewsVideo) {
+        const entityId = adminProfile.assignedEntityId;
+        if (!entityId) throw new Error('Wilayah akun admin belum terhubung. Silakan login ulang.');
+        newlyUploadedVideo = await uploadNewsVideo({
+          entityId,
+          file: pendingNewsVideo,
+          onProgress: setNewsVideoUploadProgress,
+        });
+        videoUrl = newlyUploadedVideo.publicUrl;
+      }
+
+      const videoFields = newsForm.videoProvider
+        ? { videoProvider: newsForm.videoProvider, videoUrl }
+        : { videoProvider: undefined, videoUrl: undefined };
       if (editingNews) {
         const updatedNews = news.map((item) =>
           item.id === editingNews.id
@@ -323,16 +474,20 @@ export default function AdminDashboard({
                 title: newsForm.title,
                 content: newsForm.content,
                 category: newsForm.category,
-                thumbnail: newsForm.thumbnail,
+                thumbnail: effectiveThumbnail,
+                ...videoFields,
                 status: newsForm.status,
                 datePublished: newsForm.datePublished,
               }
             : item
         );
         const success = await setNews(updatedNews);
-        if (!success) return;
-        setEditingNews(null);
-        setIsAddingNews(false);
+        // Endpoint cleanup memeriksa database lebih dahulu. Video hanya
+        // dihapus bila benar-benar belum direferensikan oleh berita.
+        if (!success) {
+          await cleanupUnreferencedUpload();
+          return;
+        }
         showToast('Berita berhasil diperbarui!');
       } else {
         const newArticle: News = {
@@ -340,13 +495,16 @@ export default function AdminDashboard({
           title: newsForm.title,
           content: newsForm.content,
           category: newsForm.category,
-          thumbnail: newsForm.thumbnail,
+          thumbnail: effectiveThumbnail,
+          ...videoFields,
           status: newsForm.status,
           datePublished: newsForm.datePublished,
         };
         const success = await setNews([newArticle, ...news]);
-        if (!success) return;
-        setIsAddingNews(false);
+        if (!success) {
+          await cleanupUnreferencedUpload();
+          return;
+        }
         showToast(
           newsForm.status === 'Draft'
             ? 'Berita baru berhasil disimpan sebagai draft.'
@@ -356,31 +514,41 @@ export default function AdminDashboard({
         );
       }
 
-      setNewsForm({
-        title: '',
-        content: '',
-        category: 'Umum',
-        thumbnail: '',
-        status: 'Published',
-        datePublished: localIsoDate(),
-      });
+      resetNewsEditor();
+    } catch (error) {
+      await cleanupUnreferencedUpload();
+      showToast(error instanceof Error ? error.message : 'Video atau berita belum berhasil disimpan.', 'info');
     } finally {
       setSavingOperation(null);
     }
   };
 
   const handleEditNewsClick = (item: News) => {
+    const existingYouTube = item.videoProvider === 'youtube' && item.videoUrl
+      ? resolveVideoEmbed('youtube', item.videoUrl)
+      : null;
+    const thumbnailWasGeneratedByYouTube = Boolean(
+      existingYouTube?.thumbnailUrl && existingYouTube.thumbnailUrl === item.thumbnail,
+    );
     setEditingNews(item);
     setNewsForm({
       title: item.title,
       content: item.content,
       category: item.category,
       thumbnail: item.thumbnail,
+      videoProvider: item.videoProvider || '',
+      videoUrl: item.videoUrl || '',
       status: item.status,
       datePublished: isValidIsoCalendarDate(item.datePublished)
         ? item.datePublished
         : localIsoDate(),
     });
+    setPendingNewsVideo(null);
+    setNewsVideoUploadProgress(0);
+    setAutomaticThumbnailTime(null);
+    setNewsThumbnailSource(
+      thumbnailWasGeneratedByYouTube ? 'auto' : item.thumbnail ? 'manual' : 'none',
+    );
     setIsAddingNews(true);
   };
 
@@ -1050,9 +1218,15 @@ export default function AdminDashboard({
                       content: '',
                       category: 'Pemerintahan',
                       thumbnail: '',
+                      videoProvider: '',
+                      videoUrl: '',
                       status: 'Published',
                       datePublished: localIsoDate(),
                     });
+                    setPendingNewsVideo(null);
+                    setNewsVideoUploadProgress(0);
+                    setNewsThumbnailSource('none');
+                    setAutomaticThumbnailTime(null);
                     setIsAddingNews(true);
                   }}
                   className="px-4 py-2 bg-gradient-to-r from-teal-700 to-teal-800 text-white rounded-lg text-xs font-bold flex items-center space-x-1 shadow active:scale-95 cursor-pointer"
@@ -1077,6 +1251,7 @@ export default function AdminDashboard({
                     type="text"
                     value={newsForm.title}
                     onChange={(e) => setNewsForm({ ...newsForm, title: e.target.value })}
+                    disabled={savingOperation !== null}
                     required
                     placeholder="Contoh: Penyerahan Raskin Beras Gogo Secara Merata di Posyandu Melati..."
                     className="w-full px-4 py-2.5 bg-white border border-gray-200 rounded-lg text-xs focus:outline-none"
@@ -1089,6 +1264,7 @@ export default function AdminDashboard({
                     <select
                       value={newsForm.category}
                       onChange={(e) => setNewsForm({ ...newsForm, category: e.target.value })}
+                      disabled={savingOperation !== null}
                       required
                       className="w-full px-4 py-2 bg-white border border-gray-200 rounded-lg text-xs focus:outline-none text-gray-700 font-semibold"
                     >
@@ -1106,6 +1282,7 @@ export default function AdminDashboard({
                       type="date"
                       value={newsForm.datePublished}
                       onChange={(e) => setNewsForm({ ...newsForm, datePublished: e.target.value })}
+                      disabled={savingOperation !== null}
                       required
                       className="w-full px-4 py-2 bg-white border border-gray-200 rounded-lg text-xs focus:outline-none text-gray-700 font-semibold"
                     />
@@ -1119,6 +1296,7 @@ export default function AdminDashboard({
                     <select
                       value={newsForm.status}
                       onChange={(e) => setNewsForm({ ...newsForm, status: e.target.value as 'Published' | 'Draft' })}
+                      disabled={savingOperation !== null}
                       required
                       className="w-full px-4 py-2 bg-white border border-gray-200 rounded-lg text-xs focus:outline-none text-gray-700 font-semibold"
                     >
@@ -1133,26 +1311,207 @@ export default function AdminDashboard({
                       type="file"
                       accept="image/*"
                       id="news-thumbnail-upload"
-                      disabled={processingImageField === 'news-thumbnail'}
+                      disabled={
+                        processingImageField === 'news-thumbnail'
+                        || isProcessingNewsVideo
+                        || savingOperation !== null
+                      }
                       onChange={(e) => {
                         const file = e.target.files?.[0];
                         if (file) {
-                          void handleSingleImageUpload(file, 'news-thumbnail', (dataUrl) =>
-                            setNewsForm((current) => ({ ...current, thumbnail: dataUrl })),
-                          );
+                          void handleSingleImageUpload(file, 'news-thumbnail', (dataUrl) => {
+                            setNewsForm((current) => ({ ...current, thumbnail: dataUrl }));
+                            setNewsThumbnailSource('manual');
+                            setAutomaticThumbnailTime(null);
+                          });
                         }
                         e.currentTarget.value = '';
                       }}
                       className="hidden"
                     />
-                    <label htmlFor="news-thumbnail-upload" className="w-full px-3 py-2 bg-indigo-50 border border-indigo-200 hover:bg-indigo-100 rounded-lg text-xs font-bold text-indigo-700 cursor-pointer flex items-center justify-center">
+                    <label
+                      htmlFor="news-thumbnail-upload"
+                      className={`flex w-full items-center justify-center rounded-lg border px-3 py-2 text-xs font-bold ${
+                        isProcessingNewsVideo || savingOperation !== null
+                          ? 'cursor-not-allowed border-gray-200 bg-gray-100 text-gray-400'
+                          : 'cursor-pointer border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100'
+                      }`}
+                    >
                       {processingImageField === 'news-thumbnail' ? <LoaderCircle className="mr-1 h-4 w-4 animate-spin" /> : <Upload className="mr-1 h-4 w-4" />}
-                      {processingImageField === 'news-thumbnail' ? 'Mengonversi...' : 'Pilih Gambar'}
+                      {processingImageField === 'news-thumbnail' ? 'Mengonversi...' : 'Upload Thumbnail Sendiri'}
                     </label>
                     {newsForm.thumbnail && (
                       <img src={newsForm.thumbnail} alt="Pratinjau thumbnail" className="h-20 w-full rounded-lg border border-gray-200 object-cover" />
                     )}
+                    <p className="text-[10px] leading-relaxed text-gray-400">
+                      {newsThumbnailSource === 'auto' && automaticThumbnailTime !== null
+                        ? `Otomatis diambil dari video pada detik ${automaticThumbnailTime.toFixed(1)}.`
+                        : newsThumbnailSource === 'manual'
+                          ? 'Menggunakan thumbnail pilihan Anda.'
+                          : 'Wajib diisi untuk kartu berita. Video lokal dan YouTube dapat mengisinya otomatis.'}
+                    </p>
                   </div>
+                </div>
+
+                <div className="space-y-3 rounded-2xl border border-indigo-100 bg-indigo-50/50 p-4">
+                  <div className="flex items-start gap-2">
+                    <Video className="mt-0.5 h-4 w-4 shrink-0 text-indigo-600" />
+                    <div>
+                      <p className="text-xs font-extrabold uppercase text-indigo-950">Video Berita (Opsional)</p>
+                      <p className="mt-0.5 text-[10px] leading-relaxed text-indigo-700">
+                        Video hanya dimuat saat pembaca membuka isi berita. Daftar berita dan beranda tetap menampilkan thumbnail.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-bold uppercase text-gray-600">Sumber Video</label>
+                      <select
+                        value={newsForm.videoProvider}
+                        onChange={(event) => handleNewsVideoProviderChange(event.target.value as '' | NewsVideoProvider)}
+                        disabled={isProcessingNewsVideo || savingOperation !== null}
+                        className="w-full rounded-lg border border-gray-200 bg-white px-4 py-2.5 text-xs font-semibold text-gray-700 focus:outline-none"
+                      >
+                        <option value="">Tanpa video</option>
+                        <option value="upload">Upload video MP4</option>
+                        <option value="youtube">Tautan YouTube</option>
+                        <option value="instagram">Tautan Instagram</option>
+                        <option value="facebook">Tautan Facebook</option>
+                      </select>
+                    </div>
+
+                    {newsForm.videoProvider === 'upload' && (
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-bold uppercase text-gray-600">Berkas Video</label>
+                        <input
+                          id="news-video-upload"
+                          type="file"
+                          accept="video/mp4,.mp4"
+                          disabled={isProcessingNewsVideo || savingOperation !== null}
+                          onChange={(event) => {
+                            const file = event.target.files?.[0];
+                            if (file) void handleNewsVideoFile(file);
+                            event.currentTarget.value = '';
+                          }}
+                          className="hidden"
+                        />
+                        <label
+                          htmlFor="news-video-upload"
+                          className={`flex w-full items-center justify-center rounded-lg border px-3 py-2.5 text-xs font-bold ${
+                            isProcessingNewsVideo || savingOperation !== null
+                              ? 'cursor-not-allowed border-gray-200 bg-gray-100 text-gray-400'
+                              : 'cursor-pointer border-indigo-200 bg-white text-indigo-700 hover:bg-indigo-100'
+                          }`}
+                        >
+                          {isProcessingNewsVideo
+                            ? <LoaderCircle className="mr-1.5 h-4 w-4 animate-spin" />
+                            : <Upload className="mr-1.5 h-4 w-4" />}
+                          {isProcessingNewsVideo
+                            ? 'Mengambil thumbnail...'
+                            : pendingNewsVideo
+                              ? 'Ganti Video MP4'
+                              : newsForm.videoUrl
+                                ? 'Ganti Video MP4'
+                                : 'Pilih Video MP4'}
+                        </label>
+                        <p className="text-[10px] text-gray-400">Maksimal 40 MB. Upload langsung ke Supabase Storage.</p>
+                      </div>
+                    )}
+
+                    {isEmbedProvider(newsForm.videoProvider) && (
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-bold uppercase text-gray-600">
+                          Tautan {newsForm.videoProvider === 'youtube' ? 'YouTube' : newsForm.videoProvider === 'instagram' ? 'Instagram' : 'Facebook'}
+                        </label>
+                        <div className="relative">
+                          <Link2 className="absolute left-3 top-2.5 h-4 w-4 text-gray-400" />
+                          <input
+                            type="url"
+                            value={newsForm.videoUrl}
+                            disabled={savingOperation !== null}
+                            onChange={(event) => {
+                              const value = event.target.value;
+                              const resolved = resolveVideoEmbed(newsForm.videoProvider as VideoEmbedProvider, value);
+                              setNewsForm((current) => ({
+                                ...current,
+                                videoUrl: value,
+                                thumbnail: resolved?.thumbnailUrl && newsThumbnailSource !== 'manual'
+                                  ? resolved.thumbnailUrl
+                                  : current.thumbnail,
+                              }));
+                              if (resolved?.thumbnailUrl && newsThumbnailSource !== 'manual') {
+                                setNewsThumbnailSource('auto');
+                                setAutomaticThumbnailTime(null);
+                              }
+                            }}
+                            placeholder={newsForm.videoProvider === 'youtube'
+                              ? 'https://www.youtube.com/watch?v=...'
+                              : newsForm.videoProvider === 'instagram'
+                                ? 'https://www.instagram.com/reel/.../'
+                                : 'https://www.facebook.com/.../videos/.../'}
+                            className="w-full rounded-lg border border-gray-200 bg-white py-2.5 pl-10 pr-4 text-xs focus:outline-none"
+                          />
+                        </div>
+                        {newsForm.videoUrl && !resolveVideoEmbed(newsForm.videoProvider, newsForm.videoUrl) && (
+                          <p className="text-[10px] font-semibold text-rose-600">Tautan video belum valid.</p>
+                        )}
+                        {newsForm.videoProvider !== 'youtube' && (
+                          <p className="text-[10px] text-gray-400">Instagram/Facebook memerlukan thumbnail yang Anda upload sendiri.</p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  {(pendingNewsVideo || newsForm.videoUrl) && newsForm.videoProvider && (
+                    <div className="relative overflow-hidden rounded-xl border border-indigo-100 bg-slate-950">
+                      {newsForm.videoProvider === 'upload' ? (
+                        <video
+                          src={newsVideoPreviewUrl || newsForm.videoUrl}
+                          poster={newsForm.thumbnail || undefined}
+                          controls
+                          playsInline
+                          preload="metadata"
+                          className="aspect-video w-full object-contain"
+                        />
+                      ) : (() => {
+                        const resolved = resolveVideoEmbed(newsForm.videoProvider as VideoEmbedProvider, newsForm.videoUrl);
+                        return resolved ? (
+                          <iframe
+                            src={resolved.embedUrl}
+                            title="Pratinjau video berita"
+                            className="aspect-video w-full"
+                            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                            allowFullScreen
+                            loading="lazy"
+                            referrerPolicy="strict-origin-when-cross-origin"
+                          />
+                        ) : null;
+                      })()}
+                      <button
+                        type="button"
+                        onClick={() => handleNewsVideoProviderChange('')}
+                        className="absolute right-2 top-2 rounded-full bg-slate-950/80 p-1.5 text-white hover:bg-rose-600"
+                        aria-label="Hapus video dari berita"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
+                  )}
+
+                  {pendingNewsVideo && (
+                    <p className="text-[10px] font-semibold text-indigo-700">
+                      {pendingNewsVideo.name} • {formatVideoSize(pendingNewsVideo.size)}
+                    </p>
+                  )}
+                  {savingOperation === 'news' && pendingNewsVideo && newsVideoUploadProgress > 0 && (
+                    <div className="space-y-1">
+                      <div className="h-2 overflow-hidden rounded-full bg-indigo-100">
+                        <div className="h-full bg-indigo-600 transition-all" style={{ width: `${newsVideoUploadProgress}%` }} />
+                      </div>
+                      <p className="text-[10px] font-bold text-indigo-700">Mengunggah video {newsVideoUploadProgress}%</p>
+                    </div>
+                  )}
                 </div>
 
                 <div className="space-y-1.5">
@@ -1160,6 +1519,7 @@ export default function AdminDashboard({
                   <textarea
                     value={newsForm.content}
                     onChange={(e) => setNewsForm({ ...newsForm, content: e.target.value })}
+                    disabled={savingOperation !== null}
                     required
                     rows={8}
                     placeholder="Ketik rincian narasi detail berita desa. Pisahkan paragraf ganda dengan baris kosong ganda..."
@@ -1170,19 +1530,22 @@ export default function AdminDashboard({
                 <div className="flex gap-2.5 pt-2">
                   <button
                     type="submit"
-                    disabled={processingImageField !== null || savingOperation !== null}
+                    disabled={processingImageField !== null || isProcessingNewsVideo || savingOperation !== null}
                     className="px-4 py-2 bg-teal-700 hover:bg-teal-600 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-lg text-xs font-bold flex items-center space-x-1.5"
                   >
                     <Save className="h-4 w-4" />
                     <span>
                       {savingOperation === 'news'
-                        ? 'Menyimpan...'
+                        ? pendingNewsVideo && newsVideoUploadProgress < 100
+                          ? `Mengunggah Video ${newsVideoUploadProgress}%`
+                          : 'Menyimpan...'
                         : editingNews ? 'Perbarui Berita' : 'Simpan Berita'}
                     </span>
                   </button>
                   <button
                     type="button"
-                    onClick={() => setIsAddingNews(false)}
+                    onClick={resetNewsEditor}
+                    disabled={savingOperation !== null}
                     className="px-4 py-2 bg-white border border-gray-200 text-gray-500 rounded-lg text-xs font-bold flex items-center space-x-1.5"
                   >
                     <Undo2 className="h-4 w-4" />
@@ -1215,6 +1578,12 @@ export default function AdminDashboard({
                               day: 'numeric',
                             })}
                           </p>
+                          {item.videoUrl && (
+                            <span className="mt-1 inline-flex items-center gap-1 rounded-full bg-indigo-50 px-2 py-0.5 text-[9px] font-bold uppercase text-indigo-700">
+                              <PlayCircle className="h-3 w-3" />
+                              Video {item.videoProvider === 'upload' ? 'Storage' : item.videoProvider || ''}
+                            </span>
+                          )}
                         </td>
                         <td className="p-3 w-32 text-center font-bold text-gray-600">
                           <span className="text-[10px] bg-slate-100 text-slate-700 px-2 py-0.5 rounded font-mono">

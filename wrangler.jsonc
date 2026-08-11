@@ -6,7 +6,8 @@
   "compatibility_flags": ["nodejs_compat"],
   "vars": {
     "SUPABASE_URL": "https://zdyrcecfvkhmavwvfgom.supabase.co",
-    "SUPABASE_STORAGE_BUCKET": "portal-media"
+    "SUPABASE_STORAGE_BUCKET": "portal-media",
+    "SUPABASE_VIDEO_BUCKET": "portal-videos"
   },
   "hyperdrive": [
     {
