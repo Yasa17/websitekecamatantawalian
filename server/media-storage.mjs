@@ -137,12 +137,12 @@ const directStorageEndpoint = (supabaseUrl) => {
     const url = new URL(supabaseUrl);
     const match = /^([a-z0-9-]+)\.supabase\.co$/i.exec(url.hostname);
     if (match) {
-      return `${url.protocol}//${match[1]}.storage.supabase.co/storage/v1/upload/resumable`;
+      return `${url.protocol}//${match[1]}.storage.supabase.co/storage/v1/upload/resumable/sign`;
     }
   } catch {
     // URL sudah divalidasi oleh pemanggil sebelum fungsi ini digunakan.
   }
-  return `${supabaseUrl}/storage/v1/upload/resumable`;
+  return `${supabaseUrl}/storage/v1/upload/resumable/sign`;
 };
 
 export const createSupabaseMediaStorage = (environment = {}) => {

@@ -137,7 +137,7 @@ test('tiket unggah video dibuat di bucket terpisah tanpa membocorkan secret', as
     );
     assert.equal(
       ticket.tusEndpoint,
-      'https://project.storage.supabase.co/storage/v1/upload/resumable',
+      'https://project.storage.supabase.co/storage/v1/upload/resumable/sign',
     );
     assert.equal(JSON.stringify(ticket).includes('sb_secret_jangan-bocor'), false);
   } finally {
